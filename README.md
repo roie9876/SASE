@@ -83,6 +83,63 @@ SRv6 was designed to simplify and modernize:
 
 The intelligence is pushed to the **ingress node** and the **controller**. The core becomes stateless IPv6 forwarding.
 
+### SRv6: Unified Forwarding Architecture
+SRv6 fundamentally acts as the unified base building block across all network domains. Since it relies on native IPv6 forwarding, a single uSID architecture can span across the Host, Data Center, Access, Metro, Core, and public Cloud seamlessly.
+
+```mermaid
+flowchart LR
+    subgraph Traffic Flow
+    direction LR
+    Access ~~~ Metro ~~~ Core ~~~ DC ~~~ Cloud
+    end
+    
+    SR[**SRv6 uSID Data Plane**<br/>The Universal IPv6 Base Building Block]
+    
+    Access --- SR
+    Metro --- SR
+    Core --- SR
+    DC --- SR
+    Cloud --- SR
+    
+    style SR fill:#fff3cd,stroke:#e5dbb9,stroke-width:2px,color:#000
+    style Access fill:#f8f9fa,stroke:#d3d3d3
+    style Metro fill:#d1e7dd,stroke:#badbcc
+    style Core fill:#cff4fc,stroke:#b6effb
+    style DC fill:#fefefe,stroke:#fdfdfe
+    style Cloud fill:#f8d7da,stroke:#f5c2c7
+```
+
+### Rich SRv6 Ecosystem
+SRv6 is strongly supported across a diverse industry ecosystem, from hardware to open-source software applications.
+
+```mermaid
+mindmap
+  root((SRv6 uSID<br/>Ecosystem))
+    Network Equipment
+      Cisco
+      Nokia
+      Juniper
+      Arista
+      Huawei
+    Merchant Silicon
+      Broadcom
+      Marvell
+      Barefoot
+    Smart NICs
+      Intel
+      Mellanox
+    Open Source Stacks
+      Linux
+      SONiC
+      FRRouting
+      FD_io
+    Apps & Tools
+      Wireshark
+      TCPDUMP
+      Cilium
+      eBPF
+```
+
 ---
 
 ## 3) How Does the Source Know the Entire Path?
