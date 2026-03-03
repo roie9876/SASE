@@ -37,11 +37,16 @@ SRv6 (Segment Routing over IPv6) is a routing architecture where:
 
 Instead of routers making independent hop-by-hop routing decisions, the ingress node defines the full path. This is sometimes called "source routing", but implemented in a scalable, carrier-grade way.
 
+### SRv6 Base Concepts
+- **SID (Segment Identifier)**: A 128-bit instruction placed in the IPv6 destination address field – analogous to an MPLS Label.
+- **Locator**: The portion of the 128-bit SID that identifies a Node (analogous to SR Node SID).
+- **Function**: The portion of the 128-bit SID that identifies a local behavior on the receiving Node (analogous to SR VPN label, Adj-SID).
+
 ```mermaid
 classDiagram
     class Packet {
         +Outer IPv6 Header (Dest: Active Segment)
-        +Segment Routing Header (SRH)
+        +Segment Routing Header (SRH)* Optional in uSID
         +Payload
     }
     class SRH {
@@ -51,6 +56,11 @@ classDiagram
     }
     Packet *-- SRH
 ```
+
+### Full SID vs. Micro-SID (uSID)
+There are two primary flavors of SRv6:
+1. **Full SID with SRH**: Uses the 128-bit SRH header structure. Better for strict traffic engineering but carries high header overhead.
+2. **uSID (Micro-SID)**: Encodes multiple 16-bit instructions (micro-segments) into a single 128-bit IPv6 destination address (up to 6 micro-SIDs per block). This provides massive reduction in header overhead and is much simpler for ASIC processing. *The vast majority of modern SRv6 deployments use uSID.*
 
 ## 2) What Problem Does SRv6 Solve?
 
@@ -168,13 +178,14 @@ There are two interpretations depending on the node's behavior:
 [Payload]
 ```
 
-**Process:**
-1. Active segment is copied into IPv6 Destination Address.
+**Process (SRH vs uSID Shift-and-Forward):**
+
+Unlike MPLS, SRH SID-Lists are processed last-to-first.
+1. Active segment is copied into the IPv6 Destination Address.
 2. Router forwards packet toward that segment.
-3. When segment endpoint is reached:
-   - Router executes function.
-   - Pointer moves to next segment.
-4. Repeat until segment list is exhausted.
+3. When the segment endpoint is reached:
+   - In **Classic SRH**: The node executes a function, the "Segments Left" counter is decremented, and the pointer moves to the next segment.
+   - In **uSID**: It uses a "Shift-and-Forward" instruction where the node looks up the updated Destination Address, shifts the bits left, and forwards it to the next micro-segment.
 
 **Result:** No per-flow state is stored in the core. All state is in the packet.
 
