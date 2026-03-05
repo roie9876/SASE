@@ -69,37 +69,21 @@ flowchart TD
     NVA2 -. "Hosted locally on" .- VNet2
 ```
 
-### Encapsulation Dataplane Flow (Overcoming Azure Limitations)
+### Understanding the Overlay vs. Underlay
 
-Because Azure drops specific features natively (like transit routing or SRv6 SRH headers), the SASE NVA must construct packets in a way that "blinds" the Azure underlying hardware to the advanced routing headers. 
+To build this architecture successfully, an ISV must strictly separate the network into two distinct planes:
 
-The sequence below shows how a packet from a Branch travels across the Azure backbone to another site utilizing SRv6 for policy chaining, completely undetected by Azure's hypervisor.
+#### 1. The Azure Native Underlay (The Transport Layer)
+Represented by the **blue** boxes in the diagram.
+*   **What it is:** The physical Microsoft-owned network, including the Virtual Networks (VNets), subnets, and the global Azure backbone.
+*   **Its purpose:** To provide highly reliable, high-speed *basic* IP connectivity between the ISV's Virtual Machines (the NVAs). 
+*   **The constraint:** As an ISV, we do not control this layer's advanced routing. If we try to inject complex BGP topologies, SRv6 paths, or custom L2 transit natively into these blue boxes, Azure's SDN will block or drop the traffic to protect its fabric. It only sees and routes standard TCP/UDP packets.
 
-```mermaid
-sequenceDiagram
-    participant Branch as Branch Router
-    box rgb(50,50,50) Cloud Edge NVAs (SASE)
-        participant N1 as Hub NVA (East US)
-        participant N2 as Hub NVA (West EU)
-    end
-    participant AZ as Azure VNet Fabric (Underlay)
-    participant HQ as On-Prem Data Center
-    
-    Branch->>N1: Send IP Payload (via IPsec)
-    
-    Note over N1: NVA strips IPsec.<br/>Applies DPI & ZTNA Policy.
-    Note over N1: Wraps Payload in SRv6.<br/>Wraps SRv6 in UDP Tunnel!
-    
-    N1->>AZ: Send UDP Packet (Dest IP: NVA2)
-    
-    Note over AZ: Azure SDN forwards simple UDP.<br/>Completely unaware of SRv6!
-    
-    AZ->>N2: Deliver UDP Packet
-    
-    Note over N2: NVA decapsulates UDP.<br/>Reads SRv6 Header & policies.<br/>Wraps payload in IPsec for HQ.
-    
-    N2->>HQ: Send IP Payload (via IPsec)
-```
+#### 2. The ISV SASE Overlay Fabric (The Intelligence Layer)
+Represented by the **pink** boxes in the diagram.
+*   **What it is:** The proprietary software network created by the ISV running high-performance routing software (like FD.io VPP or DPDK) inside Azure VMs. 
+*   **Its purpose:** To provide the carrier-grade routing features that Azure lacks. The NVAs establish "tunnels" (like UDP, VXLAN, or IPsec) between each other over the Azure underlay. 
+*   **The magic:** All of the advanced edge features—such as BGP peering with branch routers, SRv6 traffic engineering, deep packet inspection (DPI), and zero-trust policies—happen strictly *inside* these pink overlay boxes and tunnels. By encapsulating our smart (SRv6) traffic inside "dumb" UDP packets, the underlay never sees the complexity, and simply routes the UDP packets from one NVA to another.
 
 ---
 
