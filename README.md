@@ -559,6 +559,14 @@ flowchart TD
 
     Client["Client / Branch"]:::endUser
 
+    classDef legendBox fill:#f9f9f9,stroke:#666,stroke-width:1px,color:#333
+
+    subgraph Legend ["Diagram Legend"]
+        direction TB
+        L1("fa:fa-arrow-right Bold Line: Encapsulated (Azure is BLIND)"):::legendBox
+        L2("fa:fa-long-arrow-alt-right Thin Line: Raw IPv4 (Azure Route/UDR)"):::legendBox
+    end
+
     subgraph Logical_Overlay ["ISV SRv6 Overlay Data Plane (Logical Service Chain)"]
         direction LR
         Ingress["SASE Gateway Proxy<br/>(Node A)"]:::proxy
@@ -646,3 +654,18 @@ sequenceDiagram
 6. **Re-Encapsulation & Egress:** The NVA receives the returning raw packet, looks up the active flow in its memory, and retrieves the cached `[SRv6 Header]`. It updates the pointer to the *next* segment in the chain, wraps the packet back in a new UDP tunnel, and fires it back into the Azure underlay to reach the next destination.
 
 *(Architecture Note: To maximize performance and reduce Azure bandwidth costs, modern ISVs bundle the NVA, the IPS, and the DLP all on the **same large Virtual Machine**. They run the NVA router in VPP, and the security apps in Docker containers, using zero-copy memory interfaces like `memif` to pass the raw packets instantly to the containers without the traffic ever touching the Azure network during the chain!)*
+
+### The SASE Controller (The "Brain")
+
+If the Data Plane (the NVAs) are busy wrapping, unwrapping, and steering UDP packets to build the overlay, **how do they know which SIDs to use and which policies to enforce?**
+
+This is achieved via the **SASE Controller (SDN Orchestrator)**. 
+
+* **The Control Plane (The Brain):** A centralized orchestrator (usually clustered in a highly available region or hosted outside of Azure entirely) maintains the tenant configurations, the global topology map, and all zero-trust unified security policies.
+* **The Data Plane (The Muscle):** The SASE Hub NVAs running inside the Azure VNets (VPP/DPDK dataplanes). 
+
+The Controller uses **BGP (with SRv6 extensions)** and management tunnels (e.g., gRPC, Netconf, or a custom protocol) to continuously push *Network routing logic* and *Security policies* down to the NVAs. 
+
+When a tenant wants to dynamically add a "DLP Engine" to their security chain, they simply configure it in the ISV's UI. The Controller computes the new SRv6 SID path, programs the NVA's local cache tables, and instantly the Data Plane starts injecting the DLP's SID into the `End.AD` routing header. 
+
+**Azure's underlay is completely unaware of these changes, and no Azure APIs are ever queried.** This completely decouples the ISV's feature agility from the underlying Cloud Provider's limitations!
