@@ -546,3 +546,72 @@ The ability for DevOps and Network Engineers to spin up two VMs in the cloud, co
 
 **Why it matters for SASE:**
 If a cloud provider drops extension headers, developers cannot test native SRv6 locally. They are forced to build massive encapsulation layers (UDP/VXLAN tunnels) *before* they can run their first "Hello World" SRv6 test. This severely slows down RnD and experimentation for ISVs building next-generation network stacks in the cloud.
+
+---
+
+## Deep Dive: SRv6 Overlay Service Chaining for ISVs in Azure
+
+For Independent Software Vendors (ISVs) deploying Secure Access Service Edge (SASE), SD-WAN, or security platforms in Azure, efficiently routing traffic through a sequence of security or optimization services (firewalls, IDS/IPS, proxies, WAFs) is a critical requirement. This process is known as **Service Chaining**.
+
+### Native Service Chaining vs. SRv6 Overlays
+
+In a native Azure architecture, chaining relies on the SDN (UDRs, Route Servers, and Load Balancers). This lacks granular per-flow control and is often impossible to scale cleanly across multiple virtual appliances without complex NATing.
+
+In an **SRv6 Overlay model**, the ISV abstracts the chain from the Azure network entirely:
+1.  **The Underlay (Azure VNet):** Simply acts as a dumb transport layer, forwarding UDP packets.
+2.  **The Overlay (SRv6/ISV):** The service chain path is encoded directly into the inner packet header using a Segment Routing Header (SRH).
+
+### How it looks in Architecture: Underlay vs. Overlay
+
+This diagram shows how a packet from a client is encapsulated at the edge, routed across the "dumb" Azure UDP underlay, and proxy-chained through SR-unaware security engines (like an IPS or DLP) using SRv6 `End.AD` behaviors.
+
+```mermaid
+flowchart TD
+    %% Styling
+    classDef cloud fill:#0078D4,stroke:#fff,stroke-width:2px,color:#fff
+    classDef proxy fill:#E3008C,stroke:#fff,stroke-width:2px,color:#fff
+    classDef secApp fill:#FFB900,stroke:#fff,stroke-width:2px,color:#333
+    classDef endUser fill:#505050,stroke:#fff,stroke-width:2px,color:#fff
+
+    Client["Client / Branch"]:::endUser
+
+    subgraph Logical_Overlay ["ISV SRv6 Overlay Data Plane (Logical Service Chain)"]
+        direction LR
+        Ingress["SASE Gateway Proxy<br/>(Node A)"]:::proxy
+        ProxyB["SRv6 Proxy (End.AD)<br/>(Node B)"]:::proxy
+        ProxyC["SRv6 Proxy (End.AD)<br/>(Node C)"]:::proxy
+        Egress["Internet Egress"]:::endUser
+        
+        IPS["IPS Engine<br/>(SR-Unaware VM)"]:::secApp
+        DLP["DLP Engine<br/>(SR-Unaware VM)"]:::secApp
+        
+        Ingress == "SID_B (SRv6+UDP)" ==> ProxyB
+        ProxyB -- "Strips SRH<br/>Raw IPv4" --> IPS
+        IPS -- "Raw IPv4" --> ProxyB
+        ProxyB == "SID_C (SRv6+UDP)" ==> ProxyC
+        ProxyC -- "Strips SRH<br/>Raw IPv4" --> DLP
+        DLP -- "Raw IPv4" --> ProxyC
+        ProxyC == "Decapsulated" ==> Egress
+    end
+    
+    subgraph Azure_Underlay ["Azure Native VNet Transport (Physical Route)"]
+        direction LR
+        VNet["Azure SDN / Hypervisor<br/>(Only sees standard UDP traffic between VMs)"]:::cloud
+    end
+    
+    Client -. "IPsec" .-> Ingress
+    
+    %% Relationships bridging underlay/overlay
+    Ingress -. "Tunnel via UDP" .-> VNet
+    ProxyB -. "Tunnel via UDP" .-> VNet
+    ProxyC -. "Tunnel via UDP" .-> VNet
+```
+
+### The SRv6 Proxy Mechanisms
+
+Because most security appliances (Firewalls, IDS/IPS) are "SR-unaware" (they don't understand IPv6 SRH headers and drop them), the ISVs deploy the SRv6 logic alongside them using proxy functions:
+
+*   **End.AD (Dynamic Proxy):** The SRv6 endpoint removes the IPv6 and SRH headers, forwarding the pure original inner packet (e.g., IPv4) to the security appliance. When the appliance finishes inspecting it and routes it back, the endpoint retrieves the cached SRH, updates the active Segment to the next hop, and fires it down the chain.
+*   **End.AM (Masquerading Proxy):** Used when the appliance can handle IPv6 but not SR-headers. The endpoint "hides" the SRH, modifying the IPv6 destination address to point to the appliance.
+
+By wrapping this entire sequence inside UDP tunnels across the Azure VNets, the cloud provider remains entirely oblivious to the complex, distributed service chaining occurring above it.
