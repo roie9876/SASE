@@ -1,5 +1,19 @@
 # Cloud-Native SASE / SD-WAN ISV Architecture
 
+### Master Table of Contents
+1. [Repository Overview](#repository-overview)
+2. [Azure Underlay Limitations & ISV SASE Workarounds](#azure-underlay-limitations--isv-sase-workarounds)
+3. [Deep Dive: Native SRv6 Architecture](#deep-dive-native-srv6-architecture)
+4. [Deep Dive: IPv6 SRH Pass-Through in Cloud](#deep-dive-ipv6-srh-pass-through-in-cloud)
+5. [Deep Dive: Router Appliance as WAN Hub](#deep-dive-router-appliance-as-wan-hub)
+6. [Deep Dive: Customer-Controlled L3 Transit](#deep-dive-customer-controlled-l3-transit)
+7. [Deep Dive: BGP-Driven WAN Fabric](#deep-dive-bgp-driven-wan-fabric)
+8. [Deep Dive: SD-WAN Underlay Flexibility vs Managed Simplicity](#deep-dive-sd-wan-underlay-flexibility-vs-managed-simplicity)
+9. [Deep Dive: Carrier-Grade WAN Patterns](#deep-dive-carrier-grade-wan-patterns)
+10. [Deep Dive: SRv6 Experimentation Feasible](#deep-dive-srv6-experimentation-feasible)
+
+---
+
 ## Repository Overview
 This repository serves as a technical knowledge base and architecture playground for building a **carrier-grade SASE (Secure Access Service Edge) and SD-WAN product** hosted natively in Microsoft Azure. 
 
@@ -62,15 +76,15 @@ Here are the core concepts and how we adapt them for Azure:
 
 ---
 
-# Native SRv6 (Segment Routing over IPv6)
+## Deep Dive: Native SRv6 Architecture
 
-## Complete Technical Overview
+### Complete Technical Overview
 
-Welcome to the IPv6 Educational Series. This document focuses on **Native SRv6 (Segment Routing over IPv6)**.
+Welcome to the IPv6 Educational Series. This section focuses on **Native SRv6 (Segment Routing over IPv6)**.
 
 ---
 
-### Table of Contents
+#### SRv6 Table of Contents
 1. [What is SRv6?](#1-what-is-srv6)
 2. [What Problem Does SRv6 Solve?](#2-what-problem-does-srv6-solve)
 3. [How Does the Source Know the Entire Path?](#3-how-does-the-source-know-the-entire-path)
@@ -374,3 +388,81 @@ You are *not* using cloud backbone SR; you are building your own SR domain insid
 
 ---
 *End of SRv6 Technical Brief*
+
+---
+
+## Deep Dive: IPv6 SRH Pass-Through in Cloud
+
+**What is it?**
+SRH (Segment Routing Header) is a type of IPv6 Extension Header. IPv6 was designed to be extensible, allowing intermediate routers to process additional headers before the actual packet payload (TCP/UDP). "Pass-through" means the cloud network fabric allows these packets to traverse the network without dropping them.
+
+**Why it matters for SASE:**
+To build a true SRv6 fabric without tunneling, every router/switch in the path must at least ignore the SRH and forward the packet based on the outer IPv6 destination address. If the cloud provider's underlying hardware load balancers or hypervisor vSwitches are configured to drop unknown extension headers (often done for DDoS protection or legacy hardware limitations), native SRv6 is impossible.
+
+---
+
+## Deep Dive: Router Appliance as WAN Hub
+
+**What is it?**
+Instead of using cloud-native hub constructs (like AWS Transit Gateway or Azure Virtual WAN), an ISV deploys their own Virtual Machine running a software router (e.g., VPP, DPDK, FRR) to act as the massive central aggregator for thousands of branch offices.
+
+**Why it matters for SASE:**
+ISVs need ultimate control. A custom NVA (Network Virtual Appliance) allows the ISV to run proprietary Deep Packet Inspection (DPI), custom highly-scaled IPsec termination, zero-trust network access (ZTNA) proxies, and segment routing. 
+**The challenge:** In cloud networks, dynamically telling the cloud's native subnets to use this new 3rd-party appliance as the absolute center of the universe usually requires complicated and constantly updating API calls (managing UDRs).
+
+---
+
+## Deep Dive: Customer-Controlled L3 Transit
+
+**What is it?**
+In classical networking, a router receives a packet on Interface A from Network X, and forwards it out Interface B to Network Y. This is transit.
+Cloud networks like Azure VNets or AWS VPCs are purposefully built as **stub networks**, meaning they are destinations, not transit hubs.
+
+**Why it matters for SASE:**
+If you want Branch A to talk to Branch B, and they are both connected via IPsec to your cloud-hosted SASE Hub, that cloud Hub must act as a transit router. Cloud providers actively try to prevent tenant VMs from blindly routing traffic they do not own (to prevent spoofing loops). SASE platforms must engineer around these anti-spoofing and non-transit behaviors by utilizing overlays (like VXLAN or encapsulating IPsec traffic tightly from end to end).
+
+---
+
+## Deep Dive: BGP-Driven WAN Fabric
+
+**What is it?**
+BGP (Border Gateway Protocol) is the protocol of the internet. A "BGP-driven fabric" means that instead of static routes, every edge device (branch SD-WAN box, remote user gateway, cloud hub) uses BGP to dynamically advertise what IP subnets they own.
+
+**Why it matters for SASE:**
+At the enterprise scale (thousands of sites), static routes are impossible. When a new subnet comes online at a branch, it must be instantly known globally. 
+**The Cloud friction:** Public clouds usually limit the number of BGP peers or routes you can advertise to their native gateways. By running our *own* BGP daemon strictly within our own encrypted overlay tunnels, we bypass cloud limits entirely and scale to millions of routes.
+
+---
+
+## Deep Dive: SD-WAN Underlay Flexibility vs Managed Simplicity
+
+**What is it?**
+This is the classic engineering tradeoff between "easy to use" and "limitless flexibility."
+- **Managed Simplicity (e.g., Azure vWAN):** You click a button, and Azure spins up hubs, configures BGP automatically, and attaches VPNs. You are locked into Azure's way of thinking.
+- **Underlay Flexibility (e.g., Custom SASE NVA):** You build the Linux VM, install DPDK, compile the dataplane, build the routing daemons, and manage the orchestration. It requires a massive software engineering effort.
+
+**Why it matters for SASE:**
+An ISV's entire business model is selling features that the basic cloud provider doesn't have (like granular path steering, advanced payload inspection, WAN optimization). You cannot build a competitive SASE product using vanilla cloud managed services. You must adopt high flexibility.
+
+---
+
+## Deep Dive: Carrier-Grade WAN Patterns
+
+**What is it?**
+"Carrier-grade" implies massive scale, 99.999% uptime, determinism, and advanced topologies:
+- **Asymmetric Routing:** Traffic leaves via ISP A but returns via ISP B. Cloud firewalls/LBs typically drop this because they are stateful. Carrier networks must support it.
+- **Anycast:** Multiple hubs share the same IP address; branch offices automatically connect to the physically closest hub.
+- **Traffic Engineering (TE):** Selecting a slower path deliberately because the fast path is dropping VOIP packets.
+
+**Why it matters for SASE:**
+To provide a telco-like experience, the SASE ISV's software must reimplement these carrier-grade behaviors inside their software layer, because the underlying cloud SDN is too restrictive to support them natively.
+
+---
+
+## Deep Dive: SRv6 Experimentation Feasible
+
+**What is it?**
+The ability for DevOps and Network Engineers to spin up two VMs in the cloud, construct a raw SRv6 IPv6 packet using a Python script or packet generator, and observe it arriving perfectly intact on the other VM using `tcpdump`.
+
+**Why it matters for SASE:**
+If a cloud provider drops extension headers, developers cannot test native SRv6 locally. They are forced to build massive encapsulation layers (UDP/VXLAN tunnels) *before* they can run their first "Hello World" SRv6 test. This severely slows down RnD and experimentation for ISVs building next-generation network stacks in the cloud.
