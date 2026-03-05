@@ -599,3 +599,50 @@ Because most security appliances (Firewalls, IDS/IPS) are "SR-unaware" (they don
 *   **End.AM (Masquerading Proxy):** Used when the appliance can handle IPv6 but not SR-headers. The endpoint "hides" the SRH, modifying the IPv6 destination address to point to the appliance.
 
 By wrapping this entire sequence inside UDP tunnels across the Azure VNets, the cloud provider remains entirely oblivious to the complex, distributed service chaining occurring above it.
+### How to Service Chain Encapsulated Traffic in Azure (The "Peeling the Onion" Flow)
+
+If the traffic is wrapped in an outer UDP tunnel (to hide the SRv6 headers from Azure), **the Azure VNet and any native Azure Load Balancers are completely blind to the actual payload.** They cannot read the inner IP addresses, so they cannot perform native service chaining (like sending traffic to a firewall based on a UDR).
+
+Because Azure cannot do it, **your SASE NVA must act as the "Service Router" and do the decapsulation locally before handing the traffic to the security services.**
+
+Here is exactly how an ISV engineers this inside a single Azure VNet, utilizing the SRv6 `End.AD` (Endpoint to Dynamic Proxy) function.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    
+    box rgb(40,40,40) Azure VNet Boundary
+        participant AZ as Azure Fabric (Underlay)
+        participant NVA as SASE Hub NVA (vRouter)
+        participant IPS as IPS Engine (SR-Unaware)
+    end
+
+    Note over AZ,NVA: Packet enters Azure as:<br/>[Outer IP] + [UDP] + [SRv6] + [Client Data]
+    AZ->>NVA: Delivers standard UDP packet
+    
+    Note over NVA: NVA terminates UDP tunnel.<br/>Exposes inner SRv6 Header & identifies End.AD SID.
+    NVA->>NVA: Caches SRv6 Header in RAM
+    
+    Note over NVA,IPS: Packet is now bare:<br/>[Raw Client Data] (e.g. standard IPv4/IPv6)
+    NVA->>IPS: Forwards RAW packet over local interface
+    
+    Note over IPS: IPS reads raw traffic natively<br/>(Executes malware scans & policies)
+    
+    IPS->>NVA: Returns clean RAW packet
+    
+    NVA->>NVA: Retrieves cached SRv6 Header.<br/>Updates to next SID in chain (e.g. to DLP).
+    
+    Note over NVA,AZ: Packet is re-encapsulated:<br/>[New Outer IP] + [UDP] + [Updated SRv6] + [Client Data]
+    NVA->>AZ: Forwards back to Azure Underlay
+```
+
+#### The Step-by-Step Mechanism:
+
+1. **The Encapsulated Packet Arrives (from the Underlay):** A UDP packet arrives at your Azure VNet from another Hub. Azure simply looks at the Outer IP, routes it to your SASE NVA VM's NIC, and considers its job done.
+2. **The NVA "Peels the Onion" (Decapsulation):** The NVA's high-performance data plane (like VPP or DPDK) receives the UDP packet, strips off the UDP and Outer IP headers, and exposes the inner `[SRv6 Header]`.
+3. **Caching the Route (End.AD):** The NVA reads the SID (Segment Identifier). Recognizing the packet needs to go to a local SR-unaware IPS, it executes the `End.AD` proxy function. It strips the SRv6 header entirely and saves it to a local cache table.
+4. **Raw Inspection:** The NVA takes the completely bare `[Raw Client Data]` (standard IPv4/IPv6 traffic) and sends it out a dedicated local network interface to the neighboring IPS process (a VM or container). Because the packet is now bare, the IPS can successfully read, inspect, and filter the traffic based on standard IPs and ports.
+5. **The Returns:** The IPS finishes inspecting the packet. Seeing that it is safe, it routes the raw packet back to the NVA's interface.
+6. **Re-Encapsulation & Egress:** The NVA receives the returning raw packet, looks up the active flow in its memory, and retrieves the cached `[SRv6 Header]`. It updates the pointer to the *next* segment in the chain, wraps the packet back in a new UDP tunnel, and fires it back into the Azure underlay to reach the next destination.
+
+*(Architecture Note: To maximize performance and reduce Azure bandwidth costs, modern ISVs bundle the NVA, the IPS, and the DLP all on the **same large Virtual Machine**. They run the NVA router in VPP, and the security apps in Docker containers, using zero-copy memory interfaces like `memif` to pass the raw packets instantly to the containers without the traffic ever touching the Azure network during the chain!)*
