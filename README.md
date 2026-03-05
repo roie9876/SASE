@@ -84,6 +84,15 @@ flowchart TB
 
 ---
 
+## SASE Reference Architecture in Azure
+
+To understand how an ISV builds a custom SASE fabric in Azure without using managed Network services (like Virtual WAN), we must visualize the separation between the **Azure Underlay** and the **ISV Overlay**. High-performance NVAs (Network Virtual Appliances) hosted in VMs act as the core routing fabric.
+
+### Cloud Hub & Spoke Connectivity Model
+
+This diagram illustrates how on-premise locations, branch offices, and remote users connect to the cloud fabric. Notice that Azure acts purely as the physical transport layer.
+
+```mermaid
 flowchart TD
     %% Styling
     classDef cloud fill:#0078D4,stroke:#fff,stroke-width:2px,color:#fff
