@@ -2,15 +2,16 @@
 
 ### Master Table of Contents
 1. [Repository Overview](#repository-overview)
-2. [Azure Underlay Limitations & ISV SASE Workarounds](#azure-underlay-limitations--isv-sase-workarounds)
-3. [Deep Dive: Native SRv6 Architecture](#deep-dive-native-srv6-architecture)
-4. [Deep Dive: IPv6 SRH Pass-Through in Cloud](#deep-dive-ipv6-srh-pass-through-in-cloud)
-5. [Deep Dive: Router Appliance as WAN Hub](#deep-dive-router-appliance-as-wan-hub)
-6. [Deep Dive: Customer-Controlled L3 Transit](#deep-dive-customer-controlled-l3-transit)
-7. [Deep Dive: BGP-Driven WAN Fabric](#deep-dive-bgp-driven-wan-fabric)
-8. [Deep Dive: SD-WAN Underlay Flexibility vs Managed Simplicity](#deep-dive-sd-wan-underlay-flexibility-vs-managed-simplicity)
-9. [Deep Dive: Carrier-Grade WAN Patterns](#deep-dive-carrier-grade-wan-patterns)
-10. [Deep Dive: SRv6 Experimentation Feasible](#deep-dive-srv6-experimentation-feasible)
+2. [SASE Reference Architecture in Azure](#sase-reference-architecture-in-azure)
+3. [Azure Underlay Limitations & ISV SASE Workarounds](#azure-underlay-limitations--isv-sase-workarounds)
+4. [Deep Dive: Native SRv6 Architecture](#deep-dive-native-srv6-architecture)
+5. [Deep Dive: IPv6 SRH Pass-Through in Cloud](#deep-dive-ipv6-srh-pass-through-in-cloud)
+6. [Deep Dive: Router Appliance as WAN Hub](#deep-dive-router-appliance-as-wan-hub)
+7. [Deep Dive: Customer-Controlled L3 Transit](#deep-dive-customer-controlled-l3-transit)
+8. [Deep Dive: BGP-Driven WAN Fabric](#deep-dive-bgp-driven-wan-fabric)
+9. [Deep Dive: SD-WAN Underlay Flexibility vs Managed Simplicity](#deep-dive-sd-wan-underlay-flexibility-vs-managed-simplicity)
+10. [Deep Dive: Carrier-Grade WAN Patterns](#deep-dive-carrier-grade-wan-patterns)
+11. [Deep Dive: SRv6 Experimentation Feasible](#deep-dive-srv6-experimentation-feasible)
 
 ---
 
@@ -20,6 +21,85 @@ This repository serves as a technical knowledge base and architecture playground
 As an Independent Software Vendor (ISV), the goal is to build a highly flexible, high-performance network overlay product **without relying on managed cloud provider abstractions** like Azure Virtual WAN (vWAN) or Azure Route Server (ARS). By doing so, we retain complete 100% control over routing protocols, traffic engineering, tunneling, and advanced architectures like SRv6, treating the public cloud simply as a high-speed IP transport underlay.
 
 This documentation explores the challenges, workarounds, and architectural patterns required to run telco-grade routing natively on top of hyperscaler Software Defined Networks (SDNs).
+
+---
+
+## SASE Reference Architecture in Azure
+
+To understand how an ISV builds a custom SASE fabric in Azure without using managed Network services (like Virtual WAN), we must visualize the separation between the **Azure Underlay** and the **ISV Overlay**. High-performance NVAs (Network Virtual Appliances) hosted in VMs act as the core routing fabric.
+
+### Cloud Hub & Spoke Connectivity Model
+
+This diagram illustrates how on-premise locations, branch offices, and remote users connect to the cloud fabric. Notice that Azure acts purely as the physical transport layer.
+
+```mermaid
+flowchart TD
+    %% Styling
+    classDef cloud fill:#0078D4,stroke:#fff,stroke-width:2px,color:#fff
+    classDef nva fill:#E3008C,stroke:#fff,stroke-width:2px,color:#fff
+    classDef edge fill:#505050,stroke:#fff,stroke-width:2px,color:#fff
+
+    subgraph ISV_SASE_Overlay ["ISV SASE Overlay Fabric (BGP & SRv6 aware)"]
+        direction LR
+        NVA1["SASE Hub NVA 1<br/>(Azure East US)"]:::nva
+        NVA2["SASE Hub NVA 2<br/>(Azure West EU)"]:::nva
+        
+        %% Core overlay connectivity
+        NVA1 <== "Internal Overlay Tunnel<br/>(SRv6 over UDP + BGP)" ==> NVA2
+    end
+    
+    subgraph Azure_Transport ["Azure Native Underlay"]
+        direction LR
+        VNet1["Azure VNet 1<br/>(East US Subnet)"]:::cloud -.-> Backbone["Azure Global Backbone<br/>(Only routes standard IP/UDP/TCP)"]:::cloud -.-> VNet2["Azure VNet 2<br/>(West EU Subnet)"]:::cloud
+    end
+    
+    subgraph Customer_Edges ["Customer Edge Locations"]
+        Branch["Branch Office<br/>(SD-WAN CPE)"]:::edge
+        HQ["On-Prem Data Center<br/>(Core Router)"]:::edge
+        User["Remote User<br/>(ZTNA Agent)"]:::edge
+    end
+    
+    %% Edge connections to NVAs
+    Branch <== "IPsec Tunnel" ===> NVA1
+    User -. "WireGuard" .-> NVA1
+    HQ <== "IPsec Tunnel" ===> NVA2
+    
+    %% NVA hosting relationship
+    NVA1 -. "Hosted locally on" .- VNet1
+    NVA2 -. "Hosted locally on" .- VNet2
+```
+
+### Encapsulation Dataplane Flow (Overcoming Azure Limitations)
+
+Because Azure drops specific features natively (like transit routing or SRv6 SRH headers), the SASE NVA must construct packets in a way that "blinds" the Azure underlying hardware to the advanced routing headers. 
+
+The sequence below shows how a packet from a Branch travels across the Azure backbone to another site utilizing SRv6 for policy chaining, completely undetected by Azure's hypervisor.
+
+```mermaid
+sequenceDiagram
+    participant Branch as Branch Router
+    box rgb(50,50,50) Cloud Edge NVAs (SASE)
+        participant N1 as Hub NVA (East US)
+        participant N2 as Hub NVA (West EU)
+    end
+    participant AZ as Azure VNet Fabric (Underlay)
+    participant HQ as On-Prem Data Center
+    
+    Branch->>N1: Send IP Payload (via IPsec)
+    
+    Note over N1: NVA strips IPsec.<br/>Applies DPI & ZTNA Policy.
+    Note over N1: Wraps Payload in SRv6.<br/>Wraps SRv6 in UDP Tunnel!
+    
+    N1->>AZ: Send UDP Packet (Dest IP: NVA2)
+    
+    Note over AZ: Azure SDN forwards simple UDP.<br/>Completely unaware of SRv6!
+    
+    AZ->>N2: Deliver UDP Packet
+    
+    Note over N2: NVA decapsulates UDP.<br/>Reads SRv6 Header & policies.<br/>Wraps payload in IPsec for HQ.
+    
+    N2->>HQ: Send IP Payload (via IPsec)
+```
 
 ---
 
