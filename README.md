@@ -56,26 +56,30 @@ If the factories are busy opening boxes and scanning items, who coordinates the 
 ### Visualizing the Difference:
 
 ```mermaid
-flowchart TD
+flowchart TB
     classDef cloud fill:#0078D4,stroke:#fff,stroke-width:2px,color:#fff
     classDef isv fill:#E3008C,stroke:#fff,stroke-width:2px,color:#fff
     classDef secApp fill:#FFB900,stroke:#fff,stroke-width:2px,color:#333
     
     subgraph Azure_Way ["The Standard Cloud Way"]
-        A1[User Data] -->|Sent to Azure| AZ1{Azure Router}:::cloud
-        AZ1 -->|Azure dictates path| S1[Security App]:::secApp
-        S1 --> AZ2{Azure Router}:::cloud
-        AZ2 -->|Azure rules limit options| D1[Destination]
+        direction TB
+        A1[User Data] -->|1. Sent to Azure| AZ1{Azure Router}:::cloud
+        AZ1 -->|2. Azure dictates| S1[Security App]:::secApp
+        S1 -->|3. Must return| AZ2{Azure Router}:::cloud
+        AZ2 -->|4. Azure rules limit| D1[Destination]
     end
 
     subgraph SASE_Way ["The ISV SASE Way (Our Control)"]
-        A2[User Data] -->|Sent to our system| NVA1{Our SASE NVA}:::isv
-        NVA1 -->|Wrapped in Plain Box| AZ3[Azure Delivery Truck<br>BLIND to inside contents]:::cloud
-        AZ3 -->|Delivers safely| NVA2{Our SASE NVA}:::isv
-        NVA2 -->|Unwraps & Inspects| S2[Our Security App]:::secApp
-        S2 -->|Clean Data| NVA2
-        NVA2 -->|Delivered securely| D2[Destination]
+        direction TB
+        A2[User Data] -->|1. Hits Our System| NVA1{Our SASE NVA}:::isv
+        NVA1 -->|2. Wrapped in Plain Box| AZ3[Azure Delivery Truck<br>BLIND to inside contents]:::cloud
+        AZ3 -->|3. Driven through Azure| NVA2{Our SASE NVA}:::isv
+        NVA2 -->|4. Unwraps Box| S2[Our Security App]:::secApp
+        S2 -->|5. Clean Data| NVA2
+        NVA2 -->|6. Delivered securely| D2[Destination]
     end
+    
+    Azure_Way ~~~ SASE_Way
 ```
 
 ---
