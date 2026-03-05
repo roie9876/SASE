@@ -11,35 +11,54 @@ This documentation explores the challenges, workarounds, and architectural patte
 
 ## Azure Underlay Limitations & ISV SASE Workarounds
 
-When building our own SASE platform on top of public cloud networks, we need to understand the behaviors and limitations of the cloud provider’s underlying Software Defined Network (SDN). Because Azure's SDN is heavily protected, an ISV must build an **overlay architecture** to achieve the following carrier-grade capabilities:
+When building our own SASE platform on top of public cloud networks, we need to understand the behaviors and limitations of the cloud provider’s underlying Software Defined Network (SDN). Because Azure's SDN is heavily protected, an ISV must build an **overlay architecture** to achieve the following carrier-grade capabilities.
 
-### 1. IPv6 SRH Pass-Through
-**The Challenge:** SRH (Segment Routing Header) is an IPv6 Extension Header. Azure's hypervisor (vSwitch) level drops IPv6 packets that contain an SRH header. They are highly restrictive regarding IPv6 extension headers to prevent potential security vectors or parsing bugs in hardware load balancers.
-**The Workaround:** To route SRv6 packets between our SASE NVAs (Network Virtual Appliances) in Azure, we must wrap the SRv6 packets inside a UDP tunnel (e.g., `SRv6 over UDP` or `VXLAN`), or encrypt them inside IPsec ESP, effectively hiding the SRH header from the Azure SDN.
+Here are the core concepts and how we adapt them for Azure:
 
-### 2. Router Appliance as WAN Hub
-**The Challenge:** Using a third-party NVA as the central focal point (Hub) of a WAN architecture. Azure does not inherently allow a third-party VM to dynamically dictate routing to the entire VNet fabric *unless* you integrate with Azure Route Server (ARS) or use Azure vWAN—both of which this architecture completely avoids to maintain 100% ISV control.
+### 1. Native SRv6
+**Concept:** Native support for Segment Routing over IPv6 in the cloud network fabric. Allows encoding the forwarding path inside the packet using SRv6 segments. Enables service chaining, traffic engineering, and programmable routing without MPLS.
+**The Azure Challenge:** Azure's native SDN does not expose or support Native SRv6 routing capabilities for tenant payloads.
+**The Workaround:** All SRv6 logic must be handled in our proprietary software layer (inside the NVAs), independent of the Azure underlay.
+
+### 2. IPv6 SRH Pass-Through
+**Concept:** Ability for the cloud network to forward IPv6 packets that contain the Segment Routing Header (SRH) without dropping or stripping it. Required if SRv6 packets traverse the provider network unchanged.
+**The Azure Challenge:** Azure's hypervisor (vSwitch) drops IPv6 packets that contain an SRH header to prevent potential security vectors or parsing bugs in hardware load balancers.
+**The Workaround:** To route SRv6 packets between our SASE NVAs in Azure, we must wrap the SRv6 packets inside a UDP tunnel (e.g., `SRv6 over UDP` or `VXLAN`), or encrypt them inside IPsec ESP, effectively hiding the SRH header from the Azure SDN.
+
+### 3. Router Appliance as WAN Hub
+**Concept:** Capability to deploy a third-party virtual router appliance that acts as the central WAN hub for branch connectivity. The router participates in routing and controls traffic between branches, cloud workloads, and other networks.
+**The Azure Challenge:** Azure does not inherently allow a third-party VM to dynamically dictate routing to the entire VNet fabric *unless* you integrate with Azure Route Server (ARS) or use Azure vWAN—both of which this architecture completely avoids to maintain 100% ISV control.
 **The Workaround:** We treat Azure strictly as an underlay. Our edge clients, branch routers, and other cloud proxies build **Overlay Tunnels (IPsec, WireGuard, or UDP)** directly to our SASE NVA. All routing logic occurs within our proprietary overlay boundaries.
 
-### 3. Customer-Controlled L3 Transit
-**The Challenge:** "Transit" routing is when a router receives a packet on one interface and forwards it out another to a different network. By default, Azure VNets are stub networks, not transit networks. Natively routing traffic across VNets through a custom NVA requires managing static User Defined Routes (UDRs) everywhere.
+### 4. Customer-controlled L3 Transit
+**Concept:** The customer fully controls Layer-3 routing across the cloud network. Includes custom route tables, BGP policy, route filtering, and traffic engineering. The cloud provider does not abstract routing decisions.
+**The Azure Challenge:** By default, Azure VNets are stub networks, not transit networks. Natively routing traffic across VNets through a custom NVA requires managing static User Defined Routes (UDRs) everywhere.
 **The Workaround:** To achieve true transit, the SASE control plane must orchestrate an end-to-end overlay. Traffic is pulled into the NVA via client agents or branch IPsec tunnels, allowing the NVA to bridge and route traffic transparently.
 
-### 4. BGP-Driven WAN Fabric
-**The Challenge:** Modern carrier-grade networks use BGP as the universal control plane to exchange reachability information. Azure heavily limits direct BGP interactions with the VNet fabric (again, without ARS).
-**The Workaround:** The SASE product must run its own internal BGP daemon (like FRRouting/BIRD/VPP). BGP peering sessions are established *between our NVAs over our overlay tunnels*. The Azure VNet structure remains completely oblivious to this BGP chatter.
+### 5. BGP-driven WAN Fabric
+**Concept:** The WAN architecture uses BGP as the primary control plane for routing. Routes dynamically propagate between branches, SD-WAN devices, cloud workloads, and hubs. Enables scalable and dynamic WAN connectivity.
+**The Azure Challenge:** Azure heavily limits direct BGP interactions with the VNet fabric natively (without using a managed service).
+**The Workaround:** The SASE product must run its own internal BGP daemon (like FRRouting/BIRD/VPP). BGP peering sessions are established *between our NVAs exclusively over our overlay tunnels*. The Azure VNet structure remains completely oblivious to this BGP chatter.
 
-### 5. SD-WAN Underlay Flexibility vs. vWAN-like Managed Simplicity
-**The Challenge:** Azure offers Virtual WAN (vWAN), which provides high "managed simplicity." You click some buttons, and Azure automates hub-creation and routing. However, this offers very low "underlay flexibility." 
-**The Workaround:** As a SASE ISV, our value proposition is our unique routing capabilities (dynamic SRv6 slice steering, deep packet inspection, custom QoS). Azure vWAN cannot do these things. We explicitly trade simplicity for extreme flexibility by building custom, high-performance NVAs.
+### 6. SD-WAN Underlay Flexibility
+**Concept:** Ability to deploy multiple networking appliances (SD-WAN, firewall, router, load balancer) and control how traffic flows between them. Important for service chaining, custom routing paths, and multi-vendor networking stacks.
+**The Azure Challenge:** Azure restricts complex L2/L3 manipulations natively in the VNet. 
+**The Workaround:** Traffic steering between chains must be handled at the NVA level using our SRv6 policies rather than attempting to chain via Azure UDRs or Native Load Balancers.
 
-### 6. Carrier-grade WAN Patterns
-**The Challenge:** Techniques like Hub-and-Spoke, Full Mesh across global edges, sophisticated Traffic Engineering (latency-based steering), and asymmetric routing. Azure's cloud fabric natively struggles with asymmetric routing due to stateful load balancers.
-**The Workaround:** Building an overlay mesh of DPDK/VPP-accelerated NVAs allows us to reinstate these carrier-grade features in software.
+### 7. vWAN-like Managed Simplicity
+**Concept:** A managed WAN service that abstracts routing complexity. Provides automatic route propagation, centralized management, and simplified branch connectivity (Example: cloud-managed WAN hub architecture).
+**The Azure Challenge:** Azure offers Virtual WAN (vWAN), providing high "managed simplicity," but it limits capabilities to what Azure supports.
+**The Workaround:** As a SASE ISV, our value proposition is our unique routing capabilities (dynamic SRv6 slice steering, deep packet inspection, custom QoS) which vWAN cannot do. We explicitly trade Azure's managed simplicity for extreme flexibility by building our own custom, centralized management plane to control our NVAs.
 
-### 7. SRv6 Experimentation Feasible
-**The Challenge:** Developers need to spin up VMs and cleanly test SRv6 packets on the wire. Because the Azure hypervisor drops SRH headers, you cannot experiment with "native" SRv6 easily.
-**The Workaround:** All testing and local development requires setting up encapsulation (like `iproute2` tunneling SRv6 in UDP) first.
+### 8. Carrier-grade WAN Patterns
+**Concept:** Ability to build large-scale global WAN architectures with deterministic routing, high availability, multi-region connectivity, and scalable branch onboarding. Often used by telcos and large enterprises.
+**The Azure Challenge:** Azure's cloud fabric natively struggles with complex asymmetric routing (due to stateful load balancers) and deterministic traffic engineering based on latency.
+**The Workaround:** Building an overlay mesh of DPDK/VPP-accelerated NVAs allows us to reinstate these carrier-grade features entirely in software, bypassing the cloud provider's limitations.
+
+### 9. SRv6 Experimentation Feasible
+**Concept:** The cloud environment allows testing SRv6-based networking features. Includes the ability to generate SRv6 packets, run SRv6-capable routers, experiment with segment routing service chains, and test programmable data planes.
+**The Azure Challenge:** Because the Azure hypervisor drops SRH headers, you cannot experiment with "native" SRv6 frames traversing the VNet easily.
+**The Workaround:** All testing, local development, and service chaining validation requires setting up `SRv6 over UDP` or `SRv6 over IPsec` encapsulation first to allow cross-VM experimentation.
 
 ---
 
