@@ -53,13 +53,12 @@ flowchart LR
     HQ(["🏛️ Headquarters"])
     
     %% SASE Cloud Edge
-    subgraph SASE ["☁️ SASE Cloud Edge Platform"]
-        direction TB
-        subgraph NaaS ["Network as a Service (NaaS)"]
+    subgraph SASE [" ☁️ SASE Cloud Edge Platform "]
+        subgraph NaaS [" Network as a Service (NaaS) "]
             SDWAN["SD-WAN<br>Routing & Optimization"]
         end
         
-        subgraph SSE ["Security Service Edge (SSE)"]
+        subgraph SSE [" Security Service Edge (SSE) "]
             ZTNA["ZTNA<br>Zero Trust Access"]
             SWG["SWG<br>Secure Web Gateway"]
             CASB["CASB<br>Cloud Access Broker"]
@@ -138,16 +137,14 @@ flowchart TB
     classDef isv fill:#E3008C,stroke:#fff,stroke-width:2px,color:#fff
     classDef secApp fill:#FFB900,stroke:#fff,stroke-width:2px,color:#333
     
-    subgraph Azure_Way ["The Standard Cloud Way"]
-        direction TB
+    subgraph Azure_Way [" The Standard Cloud Way "]
         A1[User Data] -->|1. Sent to Azure| AZ1{Azure Router}:::cloud
         AZ1 -->|2. Azure dictates| S1[Security App]:::secApp
         S1 -->|3. Must return| AZ2{Azure Router}:::cloud
         AZ2 -->|4. Azure rules limit| D1[Destination]
     end
 
-    subgraph SASE_Way ["The ISV SASE Way (Our Control)"]
-        direction TB
+    subgraph SASE_Way [" The ISV SASE Way (Our Control) "]
         A2[User Data] -->|1. Hits Our System| NVA1{Our SASE NVA}:::isv
         NVA1 -->|2. Wrapped in Plain Box| AZ3[Azure Delivery Truck<br>BLIND to inside contents]:::cloud
         AZ3 -->|3. Driven through Azure| NVA2{Our SASE NVA}:::isv
@@ -176,7 +173,7 @@ flowchart TD
     classDef nva fill:#E3008C,stroke:#fff,stroke-width:2px,color:#fff
     classDef edge fill:#505050,stroke:#fff,stroke-width:2px,color:#fff
 
-    subgraph ISV_SASE_Overlay ["ISV SASE Overlay Fabric (BGP & SRv6 aware)"]
+    subgraph ISV_SASE_Overlay [" ISV SASE Overlay Fabric (BGP & SRv6 aware) "]
         direction LR
         NVA1["SASE Hub NVA 1<br/>(Azure East US)"]:::nva
         NVA2["SASE Hub NVA 2<br/>(Azure West EU)"]:::nva
@@ -185,12 +182,12 @@ flowchart TD
         NVA1 <== "Internal Overlay Tunnel<br/>(SRv6 over UDP + BGP)" ==> NVA2
     end
     
-    subgraph Azure_Transport ["Azure Native Underlay"]
+    subgraph Azure_Transport [" Azure Native Underlay "]
         direction LR
         VNet1["Azure VNet 1<br/>(East US Subnet)"]:::cloud -.-> Backbone["Azure Global Backbone<br/>(Only routes standard IP/UDP/TCP)"]:::cloud -.-> VNet2["Azure VNet 2<br/>(West EU Subnet)"]:::cloud
     end
     
-    subgraph Customer_Edges ["Customer Edge Locations"]
+    subgraph Customer_Edges [" Customer Edge Locations "]
         Branch["Branch Office<br/>(SD-WAN CPE)"]:::edge
         HQ["On-Prem Data Center<br/>(Core Router)"]:::edge
         User["Remote User<br/>(ZTNA Agent)"]:::edge
@@ -367,7 +364,7 @@ SRv6 fundamentally acts as the unified base building block across all network do
 
 ```mermaid
 flowchart LR
-    subgraph Traffic Flow
+    subgraph Flow [" Traffic Flow "]
     direction LR
     Access ~~~ Metro ~~~ Core ~~~ DC ~~~ Cloud
     end
@@ -698,13 +695,12 @@ flowchart TD
 
     classDef legendBox fill:#f9f9f9,stroke:#666,stroke-width:1px,color:#333
 
-    subgraph Legend ["Diagram Legend"]
-        direction TB
+    subgraph Legend [" Diagram Legend "]
         L1("fa:fa-arrow-right Bold Line: Encapsulated (Azure is BLIND)"):::legendBox
         L2("fa:fa-long-arrow-alt-right Thin Line: Raw IPv4 (Azure Route/UDR)"):::legendBox
     end
 
-    subgraph Logical_Overlay ["ISV SRv6 Overlay Data Plane (Logical Service Chain)"]
+    subgraph Logical_Overlay [" ISV SRv6 Overlay Data Plane (Logical Service Chain) "]
         direction LR
         Ingress["SASE Gateway Proxy<br/>(Node A)"]:::proxy
         ProxyB["SRv6 Proxy (End.AD)<br/>(Node B)"]:::proxy
@@ -723,7 +719,7 @@ flowchart TD
         ProxyC == "Decapsulated" ==> Egress
     end
     
-    subgraph Azure_Underlay ["Azure Native VNet Transport (Physical Route)"]
+    subgraph Azure_Underlay [" Azure Native VNet Transport (Physical Route) "]
         direction LR
         VNet["Azure SDN / Hypervisor<br/>(Only sees standard UDP traffic between VMs)"]:::cloud
     end
