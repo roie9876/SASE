@@ -683,7 +683,7 @@ In an **SRv6 Overlay model**, the ISV abstracts the chain from the Azure network
 
 ### How it looks in Architecture: Underlay vs. Overlay
 
-This diagram shows how a packet from a client is encapsulated at the edge, routed across the "dumb" Azure UDP underlay, and proxy-chained through SR-unaware security engines (like an IPS or DLP) using SRv6 `End.AD` behaviors.
+This diagram shows how a packet from a client is encapsulated at the edge, routed across the "dumb" Azure UDP underlay, and proxy-chained through SR-unaware security engines (like a FWaaS or SWG engine) using SRv6 `End.AD` behaviors.
 
 ```mermaid
 flowchart TD
@@ -702,15 +702,15 @@ flowchart TD
         L2("fa:fa-long-arrow-alt-right Thin Line: Raw IPv4 (Azure Route/UDR)"):::legendBox
     end
 
-    subgraph Logical_Overlay [" ISV SRv6 Overlay Data Plane (Logical Service Chain) "]
+    subgraph Logical_Overlay [" Customer-Dedicated SRv6 Overlay Data Plane (Logical Service Chain) "]
         direction LR
         Ingress["SASE Gateway Proxy<br/>(Node A)"]:::proxy
         ProxyB["SRv6 Proxy (End.AD)<br/>(Node B)"]:::proxy
         ProxyC["SRv6 Proxy (End.AD)<br/>(Node C)"]:::proxy
         Egress["Internet Egress"]:::endUser
         
-        IPS["IPS Engine<br/>(SR-Unaware VM)"]:::secApp
-        DLP["DLP Engine<br/>(SR-Unaware VM)"]:::secApp
+        IPS["FWaaS Engine<br/>(SR-Unaware VM/Container)"]:::secApp
+        DLP["SWG / CASB Engine<br/>(SR-Unaware VM/Container)"]:::secApp
         
         Ingress == "SID_B (SRv6+UDP)" ==> ProxyB
         ProxyB -- "Strips SRH<br/>Raw IPv4" --> IPS
@@ -721,12 +721,12 @@ flowchart TD
         ProxyC == "Decapsulated" ==> Egress
     end
     
-    subgraph Azure_Underlay [" Azure Native VNet Transport (Physical Route) "]
+    subgraph Azure_Underlay [" Azure Native VNet Transport (Customer Dedicated VNet) "]
         direction LR
         VNet["Azure SDN / Hypervisor<br/>(Only sees standard UDP traffic between VMs)"]:::cloud
     end
     
-    Client -. "IPsec" .-> Ingress
+    Client -. "IPsec/SD-WAN" .-> Ingress
     
     %% Relationships bridging underlay/overlay
     Ingress -. "Tunnel via UDP" .-> VNet
