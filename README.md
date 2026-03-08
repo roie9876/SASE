@@ -93,11 +93,13 @@ By merging these components into a single cloud-delivered platform, SASE allows 
 ---
 
 ## Repository Overview
-This repository serves as a technical knowledge base and architecture playground for building a **carrier-grade SASE (Secure Access Service Edge) and SD-WAN product** hosted natively in Microsoft Azure. 
+This repository serves as a technical knowledge base and architecture playground for building a **managed, carrier-grade SASE (Secure Access Service Edge) and SD-WAN product** hosted natively in Microsoft Azure. 
 
-As an Independent Software Vendor (ISV), the goal is to build a highly flexible, high-performance network overlay product **without relying on managed cloud provider abstractions** like Azure Virtual WAN (vWAN) or Azure Route Server (ARS). By doing so, we retain complete 100% control over routing protocols, traffic engineering, tunneling, and advanced architectures like SRv6, treating the public cloud simply as a high-speed IP transport underlay.
+As an Independent Software Vendor (ISV) offering a managed service, the deployment model is **"SASE Per Customer"**. Rather than mixing multiple clients in a massive multi-tenant network, we automatically deploy and manage an isolated, dedicated SASE environment (both Control Plane and Data Plane) in Azure for *each end customer*. 
 
-This documentation explores the challenges, workarounds, and architectural patterns required to run telco-grade routing natively on top of hyperscaler Software Defined Networks (SDNs).
+The goal is to build a highly flexible, high-performance network overlay product **without relying on managed cloud provider abstractions** like Azure Virtual WAN (vWAN) or Azure Route Server (ARS). By doing so, the ISV retains complete 100% control over the customer's routing protocols, traffic engineering, tunneling, and advanced service chaining architectures like SRv6, treating the customer's dedicated public cloud VNet simply as a high-speed IP transport underlay.
+
+This documentation explores the challenges, workarounds, and architectural patterns required to run telco-grade routing natively on top of hyperscaler Software Defined Networks (SDNs) for an isolated customer instance.
 
 ---
 
@@ -126,8 +128,8 @@ When the plain box arrives at our secure facility (The SASE NVA), here is what h
 3. We set the card aside temporarily, and hand the raw contents to the scanner (The **IPS Engine**). 
 4. When the scanner returns the clean contents to us, we tape the VIP Instruction Card back on, put it in a *new* plain box, and hand it back to the Azure courier for the next hop.
 
-#### 5. The Dispatch HQ (The Controller):
-If the factories are busy opening boxes and scanning items, who coordinates the big picture? That is the **SASE Controller**. It acts as "Air Traffic Control", logically mapping out the global topology, and pushing new VIP Instruction rules down to the factories—doing so without the Azure Fabric ever knowing.
+#### 5. The Dispatch HQ (The Customer's SASE Controller):
+If the factories are busy opening boxes and scanning items, who coordinates the big picture? That is the **Dedicated SASE Orchestrator & SD-WAN Controller**. It acts as "Air Traffic Control" for *that specific customer*, logically mapping out the global topology, and pushing new VIP Instruction rules down to the factories—doing so without the Azure Fabric ever knowing.
 
 ### Visualizing the Difference:
 
@@ -160,11 +162,11 @@ flowchart TB
 
 ## SASE Reference Architecture in Azure
 
-To understand how an ISV builds a custom SASE fabric in Azure without using managed Network services (like Virtual WAN), we must visualize the separation between the **Azure Underlay** and the **ISV Overlay**. High-performance NVAs (Network Virtual Appliances) hosted in VMs act as the core routing fabric.
+To understand how an ISV builds a custom SASE fabric in Azure (deployed dedicated-per-customer) without using managed Network services (like Virtual WAN), we must visualize the separation between the **Azure Underlay** and the **ISV Overlay**. High-performance NVAs (Network Virtual Appliances) hosted in VMs act as the core routing fabric.
 
 ### Cloud Hub & Spoke Connectivity Model
 
-This diagram illustrates how on-premise locations, branch offices, and remote users connect to the cloud fabric. Notice that Azure acts purely as the physical transport layer.
+This diagram illustrates how on-premise locations, branch offices, and remote users connect to the customer's dedicated SASE cloud fabric. Notice that Azure acts purely as the physical transport layer.
 
 ```mermaid
 flowchart TD
@@ -173,16 +175,16 @@ flowchart TD
     classDef nva fill:#E3008C,stroke:#fff,stroke-width:2px,color:#fff
     classDef edge fill:#505050,stroke:#fff,stroke-width:2px,color:#fff
 
-    subgraph ISV_SASE_Overlay [" ISV SASE Overlay Fabric (BGP & SRv6 aware) "]
+    subgraph ISV_SASE_Overlay [" Customer-Dedicated SASE Overlay Fabric (BGP & SRv6 aware) "]
         direction LR
-        NVA1["SASE Hub NVA 1<br/>(Azure East US)"]:::nva
-        NVA2["SASE Hub NVA 2<br/>(Azure West EU)"]:::nva
+        NVA1["Dedicated SASE Hub 1<br/>(Azure East US)"]:::nva
+        NVA2["Dedicated SASE Hub 2<br/>(Azure West EU)"]:::nva
         
         %% Core overlay connectivity
         NVA1 <== "Internal Overlay Tunnel<br/>(SRv6 over UDP + BGP)" ==> NVA2
     end
     
-    subgraph Azure_Transport [" Azure Native Underlay "]
+    subgraph Azure_Transport [" Azure Native Underlay (Customer's Dedicated VNET) "]
         direction LR
         VNet1["Azure VNet 1<br/>(East US Subnet)"]:::cloud -.-> Backbone["Azure Global Backbone<br/>(Only routes standard IP/UDP/TCP)"]:::cloud -.-> VNet2["Azure VNet 2<br/>(West EU Subnet)"]:::cloud
     end
@@ -209,15 +211,15 @@ To build this architecture successfully, an ISV must strictly separate the netwo
 
 #### 1. The Azure Native Underlay (The Transport Layer)
 Represented by the **blue** boxes in the diagram.
-*   **What it is:** The physical Microsoft-owned network, including the Virtual Networks (VNets), subnets, and the global Azure backbone.
-*   **Its purpose:** To provide highly reliable, high-speed *basic* IP connectivity between the ISV's Virtual Machines (the NVAs). 
+*   **What it is:** The physical Microsoft-owned network, meaning the dedicated Virtual Networks (VNets), subnets, and the global Azure backbone provisioned specifically for that customer.
+*   **Its purpose:** To provide highly reliable, high-speed *basic* IP connectivity between the ISV's Virtual Machines (the SASE Hub components). 
 *   **The constraint:** As an ISV, we do not control this layer's advanced routing. If we try to inject complex BGP topologies, SRv6 paths, or custom L2 transit natively into these blue boxes, Azure's SDN will block or drop the traffic to protect its fabric. It only sees and routes standard TCP/UDP packets.
 
-#### 2. The ISV SASE Overlay Fabric (The Intelligence Layer)
+#### 2. The Customer's SASE Overlay Fabric (The Intelligence Layer)
 Represented by the **pink** boxes in the diagram.
-*   **What it is:** The proprietary software network created by the ISV running high-performance routing software (like FD.io VPP or DPDK) inside Azure VMs. 
+*   **What it is:** The proprietary software network created by the ISV running high-performance routing software (like FD.io VPP or DPDK) inside the Azure VMs provisioned in the customer's tenant environment. 
 *   **Its purpose:** To provide the carrier-grade routing features that Azure lacks. The NVAs establish "tunnels" (like UDP, VXLAN, or IPsec) between each other over the Azure underlay. 
-*   **The magic:** All of the advanced edge features—such as BGP peering with branch routers, SRv6 traffic engineering, deep packet inspection (DPI), and zero-trust policies—happen strictly *inside* these pink overlay boxes and tunnels. By encapsulating our smart (SRv6) traffic inside "dumb" UDP packets, the underlay never sees the complexity, and simply routes the UDP packets from one NVA to another.
+*   **The magic:** All of the advanced edge features—such as BGP peering with branch routers, **service chaining between SASE products (routing natively from SD-WAN Gateway to FWaaS to SWG to CASB)**, SRv6 traffic engineering, deep packet inspection (DPI), and zero-trust policies—happen strictly *inside* these pink overlay boxes (or across local container interfaces) and tunnels. By encapsulating our smart (SRv6) traffic inside "dumb" UDP packets, the underlay never sees the complexity, and simply routes the UDP packets from one component to another.
 
 ---
 
@@ -740,65 +742,73 @@ Because most security appliances (Firewalls, IDS/IPS) are "SR-unaware" (they don
 *   **End.AM (Masquerading Proxy):** Used when the appliance can handle IPv6 but not SR-headers. The endpoint "hides" the SRH, modifying the IPv6 destination address to point to the appliance.
 
 By wrapping this entire sequence inside UDP tunnels across the Azure VNets, the cloud provider remains entirely oblivious to the complex, distributed service chaining occurring above it.
-### How to Service Chain Encapsulated Traffic in Azure (The "Peeling the Onion" Flow)
+### How to Service Chain SASE Products in Azure (The "Peeling the Onion" Flow)
 
-If the traffic is wrapped in an outer UDP tunnel (to hide the SRv6 headers from Azure), **the Azure VNet and any native Azure Load Balancers are completely blind to the actual payload.** They cannot read the inner IP addresses, so they cannot perform native service chaining (like sending traffic to a firewall based on a UDR).
+If the traffic is wrapped in an outer UDP tunnel (to hide the SRv6 headers from Azure), **the Azure VNet and any native Azure Load Balancers are completely blind to the actual payload.** They cannot read the inner IP addresses, so they cannot natively sequence traffic through different SASE products (like SD-WAN to FWaaS to SWG to CASB).
 
-Because Azure cannot do it, **your SASE NVA must act as the "Service Router" and do the decapsulation locally before handing the traffic to the security services.**
+Because Azure cannot do it, **your SD-WAN / SASE NVA must act as the "Service Router" and do the decapsulation locally before handing the traffic sequentially to the separate security containers/VMs that make up the customer's SASE environment.**
 
-Here is exactly how an ISV engineers this inside a single Azure VNet, utilizing the SRv6 `End.AD` (Endpoint to Dynamic Proxy) function.
+Here is exactly how this is engineered inside the customer's dedicated Azure VNet, utilizing the SRv6 `End.AD` (Endpoint to Dynamic Proxy) function.
 
 ```mermaid
 sequenceDiagram
     autonumber
     
-    box rgb(40,40,40) Azure VNet Boundary
+    box rgb(40,40,40) Customer Dedicated Azure VNet
         participant AZ as Azure Fabric (Underlay)
-        participant NVA as SASE Hub NVA (vRouter)
-        participant IPS as IPS Engine (SR-Unaware)
+        participant SDWAN as SD-WAN NVA (vRouter)
+        participant FWAAS as FWaaS Engine
+        participant SWG as SWG / CASB Engine
     end
 
-    Note over AZ,NVA: Packet enters Azure as:<br/>[Outer IP] + [UDP] + [SRv6] + [Client Data]
-    AZ->>NVA: Delivers standard UDP packet
+    Note over AZ,SDWAN: Packet enters Azure as:<br/>[Outer IP] + [UDP] + [SRv6] + [Client Data]
+    AZ->>SDWAN: Delivers standard UDP packet
     
-    Note over NVA: NVA terminates UDP tunnel.<br/>Exposes inner SRv6 Header & identifies End.AD SID.
-    NVA->>NVA: Caches SRv6 Header in RAM
+    Note over SDWAN: SDWAN terminates UDP tunnel.<br/>Exposes inner SRv6 Header & identifies End.AD SID for FWaaS.
+    SDWAN->>SDWAN: Caches SRv6 Header in RAM
     
-    Note over NVA,IPS: Packet is now bare:<br/>[Raw Client Data] (e.g. standard IPv4/IPv6)
-    NVA->>IPS: Forwards RAW packet over local interface
+    Note over SDWAN,FWAAS: Packet is now bare:<br/>[Raw Client Data] (e.g. standard IPv4/IPv6)
+    SDWAN->>FWAAS: Forwards RAW packet over local interface
     
-    Note over IPS: IPS reads raw traffic natively<br/>(Executes malware scans & policies)
+    Note over FWAAS: FWaaS reads raw traffic natively<br/>(Executes Firewall & IDS policies)
     
-    IPS->>NVA: Returns clean RAW packet
+    FWAAS->>SDWAN: Returns clean RAW packet
     
-    NVA->>NVA: Retrieves cached SRv6 Header.<br/>Updates to next SID in chain (e.g. to DLP).
+    SDWAN->>SDWAN: Retrieves cached SRv6 Header.<br/>Updates to next SID in chain (SWG/CASB).
+    SDWAN->>SDWAN: Caches new SRv6 Header in RAM
     
-    Note over NVA,AZ: Packet is re-encapsulated:<br/>[New Outer IP] + [UDP] + [Updated SRv6] + [Client Data]
-    NVA->>AZ: Forwards back to Azure Underlay
+    SDWAN->>SWG: Forwards RAW packet over local interface
+    Note over SWG: SWG filters URLs and CASB inspects SaaS traffic
+    SWG->>SDWAN: Returns clean RAW packet
+    
+    SDWAN->>SDWAN: Retrieves cached SRv6 Header.<br/>Updates to Exit/Egress routing.
+    Note over SDWAN,AZ: Packet is re-encapsulated:<br/>[New Outer IP] + [UDP] + [Updated SRv6] + [Client Data]
+    SDWAN->>AZ: Forwards back to Azure Underlay (Internet/Egress)
 ```
 
 #### The Step-by-Step Mechanism:
 
-1. **The Encapsulated Packet Arrives (from the Underlay):** A UDP packet arrives at your Azure VNet from another Hub. Azure simply looks at the Outer IP, routes it to your SASE NVA VM's NIC, and considers its job done.
-2. **The NVA "Peels the Onion" (Decapsulation):** The NVA's high-performance data plane (like VPP or DPDK) receives the UDP packet, strips off the UDP and Outer IP headers, and exposes the inner `[SRv6 Header]`.
-3. **Caching the Route (End.AD):** The NVA reads the SID (Segment Identifier). Recognizing the packet needs to go to a local SR-unaware IPS, it executes the `End.AD` proxy function. It strips the SRv6 header entirely and saves it to a local cache table.
-4. **Raw Inspection:** The NVA takes the completely bare `[Raw Client Data]` (standard IPv4/IPv6 traffic) and sends it out a dedicated local network interface to the neighboring IPS process (a VM or container). Because the packet is now bare, the IPS can successfully read, inspect, and filter the traffic based on standard IPs and ports.
-5. **The Returns:** The IPS finishes inspecting the packet. Seeing that it is safe, it routes the raw packet back to the NVA's interface.
-6. **Re-Encapsulation & Egress:** The NVA receives the returning raw packet, looks up the active flow in its memory, and retrieves the cached `[SRv6 Header]`. It updates the pointer to the *next* segment in the chain, wraps the packet back in a new UDP tunnel, and fires it back into the Azure underlay to reach the next destination.
+1. **The Encapsulated Packet Arrives (from the Branch):** A UDP packet arrives at the customer's Azure VNet from their branch SD-WAN router. Azure simply looks at the Outer IP, routes it to the SD-WAN NVA VM's NIC, and considers its job done.
+2. **The SD-WAN NVA "Peels the Onion" (Decapsulation):** The high-performance data plane (like VPP or DPDK) receives the UDP packet, strips off the UDP and Outer IP headers, and exposes the inner `[SRv6 Header]`.
+3. **Caching the Route (End.AD for FWaaS):** The NVA reads the SID (Segment Identifier). Recognizing the packet needs to go to the FWaaS product first, it executes the `End.AD` proxy function. It strips the SRv6 header entirely and saves it to a local cache table.
+4. **FWaaS Inspection:** The SD-WAN NVA takes the completely bare `[Raw Client Data]` (standard IPv4/IPv6 traffic) and sends it out a dedicated local network interface to the neighboring FWaaS process (a separate VM or container in the customer's deployment). Because the packet is bare, the FWaaS can successfully read, inspect, and filter the traffic based on standard IPs and ports.
+5. **The Return to Router:** The FWaaS finishes inspecting the packet. Seeing that it is safe, it routes the raw packet back to the SD-WAN NVA's interface.
+6. **Continuing the Chain (SWG/CASB):** The NVA looks up the active flow, retrieves the cached `[SRv6 Header]`, and updates the pointer to the *next* segment in the chain (the SWG/CASB). It repeats the proxy process, sending the raw packet to the SWG container for web filtering.
+7. **Re-Encapsulation & Egress:** Once the packet clears all local SASE products in the chain and returns to the SDWAN NVA, the NVA wraps the packet back in a new UDP tunnel or performs NAT, and fires it back into the Azure underlay to reach its final destination (e.g. the public Internet).
 
-*(Architecture Note: To maximize performance and reduce Azure bandwidth costs, modern ISVs bundle the NVA, the IPS, and the DLP all on the **same large Virtual Machine**. They run the NVA router in VPP, and the security apps in Docker containers, using zero-copy memory interfaces like `memif` to pass the raw packets instantly to the containers without the traffic ever touching the Azure network during the chain!)*
+*(Architecture Note: To maximize performance and reduce Azure bandwidth costs, modern ISV managed services bundle the SD-WAN gateway, the FWaaS, and the SWG all on the **same large Virtual Machine** or dedicated Kubernetes Node for that customer. They run the NVA router in VPP, and the security apps in Docker containers, using zero-copy memory interfaces like `memif` to pass the raw packets instantly between SASE products without the traffic ever touching the Azure network during the chain!)*
 
-### The SASE Controller (The "Brain")
+### The Dedicated SASE Controller (The "Brain")
 
 If the Data Plane (the NVAs) are busy wrapping, unwrapping, and steering UDP packets to build the overlay, **how do they know which SIDs to use and which policies to enforce?**
 
-This is achieved via the **SASE Controller (SDN Orchestrator)**. 
+This is achieved via the **SASE Orchestrator and SD-WAN Controller**, which is deployed or logically isolated **per customer**.
 
-* **The Control Plane (The Brain):** A centralized orchestrator (usually clustered in a highly available region or hosted outside of Azure entirely) maintains the tenant configurations, the global topology map, and all zero-trust unified security policies.
-* **The Data Plane (The Muscle):** The SASE Hub NVAs running inside the Azure VNets (VPP/DPDK dataplanes). 
+* **The Control Plane (The Brain):** A centralized, single-tenant orchestrator maintains the customer's network configurations, global topology map, and all zero-trust unified security policies. It knows exactly where the customer's branches are and what order their SASE products should be chained in.
+* **The Data Plane (The Muscle):** The SASE Hub NVAs running inside the Customer's dedicated Azure VNets (VPP/DPDK dataplanes). 
 
-The Controller uses **BGP (with SRv6 extensions)** and management tunnels (e.g., gRPC, Netconf, or a custom protocol) to continuously push *Network routing logic* and *Security policies* down to the NVAs. 
+The Controller uses **BGP (with SRv6 extensions)** and management tunnels (e.g., gRPC, Netconf, or a custom protocol) to continuously push *Network routing logic* and *Security policies* down to the customer's NVAs. 
 
-When a tenant wants to dynamically add a "DLP Engine" to their security chain, they simply configure it in the ISV's UI. The Controller computes the new SRv6 SID path, programs the NVA's local cache tables, and instantly the Data Plane starts injecting the DLP's SID into the `End.AD` routing header. 
+When a customer wants to dynamically add a "CASB Engine" to their security chain, they simply configure it in their SASE Controller UI. The Controller computes the new SRv6 SID path, programs the NVA's local cache tables, and instantly the Data Plane starts injecting the CASB's SID into the `End.AD` routing header. 
 
 **Azure's underlay is completely unaware of these changes, and no Azure APIs are ever queried.** This completely decouples the ISV's feature agility from the underlying Cloud Provider's limitations!
