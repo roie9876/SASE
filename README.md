@@ -2,18 +2,19 @@
 
 ### Master Table of Contents
 1. [Education: Understanding SASE](#education-understanding-sase)
-2. [Repository Overview](#repository-overview)
-3. [The "Explain It Like I'm 5" (ELI5) Guide](#the-explain-it-like-im-5-eli5-guide-to-our-sase)
-4. [SASE Reference Architecture in Azure](#sase-reference-architecture-in-azure)
-5. [Azure Underlay Limitations & ISV SASE Workarounds](#azure-underlay-limitations--isv-sase-workarounds)
-6. [Deep Dive: Native SRv6 Architecture](#deep-dive-native-srv6-architecture)
-7. [Deep Dive: IPv6 SRH Pass-Through in Cloud](#deep-dive-ipv6-srh-pass-through-in-cloud)
-8. [Deep Dive: Router Appliance as WAN Hub](#deep-dive-router-appliance-as-wan-hub)
-9. [Deep Dive: Customer-Controlled L3 Transit](#deep-dive-customer-controlled-l3-transit)
-10. [Deep Dive: BGP-Driven WAN Fabric](#deep-dive-bgp-driven-wan-fabric)
-11. [Deep Dive: SD-WAN Underlay Flexibility vs Managed Simplicity](#deep-dive-sd-wan-underlay-flexibility-vs-managed-simplicity)
-12. [Deep Dive: Carrier-Grade WAN Patterns](#deep-dive-carrier-grade-wan-patterns)
-13. [Deep Dive: SRv6 Experimentation Feasible](#deep-dive-srv6-experimentation-feasible)
+2. [Check Point SASE (Harmony) Architecture](#check-point-sase-harmony-architecture)
+3. [Repository Overview](#repository-overview)
+4. [The "Explain It Like I'm 5" (ELI5) Guide](#the-explain-it-like-im-5-eli5-guide-to-our-sase)
+5. [SASE Reference Architecture in Azure](#sase-reference-architecture-in-azure)
+6. [Azure Underlay Limitations & ISV SASE Workarounds](#azure-underlay-limitations--isv-sase-workarounds)
+7. [Deep Dive: Native SRv6 Architecture](#deep-dive-native-srv6-architecture)
+8. [Deep Dive: IPv6 SRH Pass-Through in Cloud](#deep-dive-ipv6-srh-pass-through-in-cloud)
+9. [Deep Dive: Router Appliance as WAN Hub](#deep-dive-router-appliance-as-wan-hub)
+10. [Deep Dive: Customer-Controlled L3 Transit](#deep-dive-customer-controlled-l3-transit)
+11. [Deep Dive: BGP-Driven WAN Fabric](#deep-dive-bgp-driven-wan-fabric)
+12. [Deep Dive: SD-WAN Underlay Flexibility vs Managed Simplicity](#deep-dive-sd-wan-underlay-flexibility-vs-managed-simplicity)
+13. [Deep Dive: Carrier-Grade WAN Patterns](#deep-dive-carrier-grade-wan-patterns)
+14. [Deep Dive: SRv6 Experimentation Feasible](#deep-dive-srv6-experimentation-feasible)
 
 ---
 
@@ -89,6 +90,78 @@ flowchart LR
 ```
 
 By merging these components into a single cloud-delivered platform, SASE allows organizations to drastically simplify their IT infrastructure while improving both security and user experience.
+
+---
+
+## Check Point SASE (Harmony) Architecture
+
+Check Point provides a comprehensive SASE solution primarily known as **Harmony SASE** (incorporating technologies from Perimeter 81) alongside **Quantum SD-WAN**. The solution uniquely converges networking and cloud-delivered security, powered by their centralized threat intelligence network.
+
+### Key Components of Check Point SASE
+
+The architecture operates across three main layers: the network endpoints, the cloud security edge, and the centralized management/intelligence plane.
+
+#### 1. The Cloud Security Edge (Harmony SASE Global PoPs)
+Check Point operates a global backbone of Points of Presence (PoPs) that act as the SASE gateway. When user or branch traffic hits this edge, it is inspected and routed securely.
+* **ZTNA (Zero Trust Network Access):** Grants remote users least-privilege access to specific corporate applications (in the cloud or on-premise) based on identity and device posture. This completely shields internal networks from the open internet without relying on traditional VPNs.
+* **Internet Access / SWG (Secure Web Gateway):** Secures users while browsing the web by blocking access to malicious domains, filtering URLs, and preventing malware downloads.
+* **CASB (Cloud Access Security Broker):** Discovers Shadow IT, controls sensitive data sharing (DLP), and protects against account takeovers in authorized SaaS environments (like M365 or Salesforce).
+* **FWaaS (Firewall as a Service):** Applies Check Point's industry-leading Next-Generation Firewall (NGFW) policies—including intrusion prevention (IPS) and application control—entirely from the cloud, eliminating the need for heavy branch firewalls.
+
+#### 2. The Network Edge (Quantum SD-WAN)
+* **Quantum SD-WAN & Quantum Gateways:** Hardware and software appliances deployed at branch locations. These edge devices intelligently route traffic across multiple WAN links (Broadband, 5G, MPLS). They ensure business-critical applications get highest priority while securely tunnelling Internet and Cloud-bound traffic to the Harmony SASE PoPs for security inspection.
+
+#### 3. Management and Threat Intelligence (The Brain)
+* **Infinity Portal (The SASE Controller):** A unified, single-pane-of-glass cloud management console. It allows administrators to configure both SD-WAN network routing policies and Harmony SASE security rules from one interface.
+* **ThreatCloud AI:** The intelligence engine natively integrated into the SASE PoPs. It gathers real-time threat data from millions of sensors worldwide and instantly updates the SASE environment to block zero-day attacks and newly discovered malware automatically.
+
+### Visualizing Check Point SASE
+
+```mermaid
+flowchart LR
+    %% Entities
+    Users(["👥 Remote Users<br/>(Harmony Agent)"])
+    Branch(["🏢 Branch Offices<br/>(Quantum SD-WAN)"])
+    
+    %% Main SASE Fabric
+    subgraph CP_SASE [" ☁️ Check Point Harmony SASE (Global PoPs) "]
+        subgraph Secure_Edge [" Security Service Edge (SSE) "]
+            ZTNA["ZTNA<br/>(Zero Trust)"]
+            SWG["SWG<br/>(Web Gateway)"]
+            CASB["CASB<br/>(SaaS Sec)"]
+            FWaaS["FWaaS<br/>(Cloud Firewall)"]
+        end
+    end
+    
+    %% Intelligence & Control
+    subgraph CP_Brain [" 🧠 Management & Intelligence "]
+        Infinity["Infinity Portal<br/>(Unified Management)"]
+        ThreatCloud["ThreatCloud AI<br/>(Threat Intelligence)"]
+    end
+    
+    %% Destinations
+    Internet(("🌐 Internet"))
+    SaaS(("☁️ SaaS Apps"))
+    IaaS(("🏗️ Corporate IaaS<br/>(AWS/Azure/GCP)"))
+
+    %% Connections
+    Users -->|Harmony Tunnels| CP_SASE
+    Branch -->|SD-WAN Tunnels| CP_SASE
+    
+    CP_Brain -.->|Policies & Real-Time Intel| CP_SASE
+    
+    CP_SASE --> Internet
+    CP_SASE --> SaaS
+    CP_SASE --> IaaS
+    
+    classDef edge fill:#f9f9f9,stroke:#333,stroke-width:2px;
+    classDef cpbrain fill:#fff0f5,stroke:#E3008C,stroke-width:2px,color:#333;
+    classDef sase fill:#e6f3ff,stroke:#0078D4,stroke-width:2px;
+    
+    class CP_SASE sase;
+    class CP_Brain cpbrain;
+    class Users,Branch,Internet,SaaS,IaaS edge;
+```
 
 ---
 
