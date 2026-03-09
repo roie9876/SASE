@@ -151,3 +151,11 @@ The VPP routing logic actively splits datapath traffic locally at the node:
 
 #### 6. The Role of Azure CNI Powered by Cilium
 While DPDK handles the ultra-fast datapaths, standard Kubernetes Management (pushing configuration, talking to the Infinity Portal, metrics) is handed off to **Azure CNI Powered by Cilium**. Cilium acts independently on the `eth0` interface, using lightweight eBPF rules to enforce strict network policies over the cluster's control plane telemetry without interfering with VPP's specialized transit.
+
+#### 7. Terminating Customer Edge IPsec: 1:1 Public IP Mapping (Bypassing K8s)
+To handle millions of incoming IPsec tunnels (IKEv2/ESP) directly from customer branches over the internet, **Check Point cannot use Kubernetes `Services` of `type: LoadBalancer`.** Standard K8s LoadBalancers would route traffic into the Node's `eth0` interface, hit the Linux Kernel (`kube-proxy` or `eBPF`), and instantly destroy the DPDK kernel bypass design.
+
+To achieve wire-speed IPsec termination:
+1. **Azure Resource Level:** An **Azure Public IP Address** is permanently bound *directly* to the physical Azure Network Interface card (e.g., the NIC acting as `eth2`).
+2. **Azure SDN NAT:** The underlying Azure Data Center network performs a massive-scale 1:1 NAT from the Public IP to the hardware NIC's private IP. 
+3. **DPDK Ingestion:** When the branch Check Point Quantum SD-WAN appliance sends an IPsec packet (UDP 500/4500) to the Public IP, the Azure switch drops it onto the hardware NIC, and it is pulled directly into the Master VPP DaemonSet's RAM. Kubernetes services do not even know the Public IP connection exists.
