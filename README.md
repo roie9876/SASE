@@ -250,13 +250,11 @@ flowchart TD
     classDef edge fill:#505050,stroke:#fff,stroke-width:2px,color:#fff
 
     subgraph AWS_Cloud ["  AWS Cloud (🧠 Management & Intelligence)  "]
-        direction LR
         Infinity["Check Point Infinity Portal<br/>(Unified Management & Logs)"]:::aws
         ThreatCloud["Check Point ThreatCloud AI<br/>(Global Threat Intelligence)"]:::aws
     end
 
     subgraph ISV_SASE_Overlay ["  Check Point SASE Overlay Fabric (Azure Data Plane)  "]
-        direction LR
         NVA1["Check Point SASE PoP 1<br/>(CloudGuard/Harmony, Azure East US)"]:::nva
         NVA2["Check Point SASE PoP 2<br/>(CloudGuard/Harmony, Azure West EU)"]:::nva
         
@@ -265,7 +263,6 @@ flowchart TD
     end
     
     subgraph Azure_Transport ["  Azure Native Underlay (Customer's Dedicated VNET)  "]
-        direction LR
         VNet1["Azure VNet 1<br/>(East US Subnet)"]:::cloud -.-> Backbone["Azure Global Backbone<br/>(Only routes standard IP/UDP/TCP)"]:::cloud -.-> VNet2["Azure VNet 2<br/>(West EU Subnet)"]:::cloud
     end
     
@@ -283,8 +280,8 @@ flowchart TD
     NVA2 -. "Real-time Threat Updates" .-> ThreatCloud
     
     %% Edge connections to NVAs
-    Branch <== "IPsec Tunnel" ===> NVA1
-    User -. "WireGuard" .-> NVA1
+    Branch <== "Quantum Auto-VPN (IPsec)" ===> NVA1
+    User -. "Harmony Agent (TLS/IPsec)" .-> NVA1
     HQ <== "IPsec Tunnel" ===> NVA2
     
     %% NVA hosting relationship
