@@ -81,46 +81,46 @@ flowchart TD
     classDef mgmt fill:#00ACC1,stroke:#fff,stroke-width:2px,color:#fff
     classDef net fill:#005A9E,stroke:#fff,stroke-width:2px,color:#fff
 
-    %% LAYER 1: Cloud Endpoints (Stand-alone nodes so GitHub doesn't squash them)
+    %% External Cloud Entities
     vWAN(("1. Azure vWAN Hub<br/>(Global Intranet Route)")):::azure
     NAT(("1. Azure NAT Gateway<br/>(Public WWW Breakout)")):::net
     Infinity(("1. AWS Infinity Portal<br/>(Global Mgmt Plane)")):::mgmt
 
-    %% LAYER 2: Physical NIC Boundaries
-    eth1["2. eth1: SR-IOV VF<br/>(Physical Data Plane)"]:::hw
-    eth2["2. eth2: SR-IOV VF<br/>(Physical Data Plane)"]:::hw
-    eth0["2. eth0: Azure CNI<br/>(Mgmt / Cilium)"]:::mgmt
+    subgraph AKS_Node [" 📍 Azure AKS Worker Node (Master VPP Architecture) "]
+        
+        subgraph NICs [" 2. Physical Host Interfaces "]
+            eth1["eth1: SR-IOV VF<br/>(Physical Data Plane)"]:::hw
+            eth2["eth2: SR-IOV VF<br/>(Physical Data Plane)"]:::hw
+            eth0["eth0: Azure CNI<br/>(Mgmt / Cilium)"]:::mgmt
+        end
 
-    %% LAYER 3: The Workhorse DaemonSet
-    VPP["3. Master VPP DaemonSet vRouter<br/>(DPDK Kernel Bypass Engine)"]:::vpp
+        VPP["3. Master VPP DaemonSet vRouter<br/>(DPDK Kernel Bypass Engine)"]:::vpp
 
-    %% LAYER 4: The Microservices (Service Chain)
-    IPsec["IPsec / WireGuard Pod"]:::pod
-    QoS["QoS Traffic Shaping Pod"]:::pod
-    FW["Firewall Inspection Pod"]:::pod
-    CASB["CASB / SWG Proxy Pod"]:::pod
+        subgraph Chain [" 4. Specialized SASE Service Pods "]
+            IPsec["IPsec / WireGuard Pod"]:::pod
+            QoS["QoS Traffic Shaping Pod"]:::pod
+            FW["Firewall Inspection Pod"]:::pod
+            CASB["CASB / SWG Proxy Pod"]:::pod
+        end
 
-    %% EXTERNAL ROUTING MAP
+        %% Internal Links
+        eth1 ===>|"Direct Memory Map"| VPP
+        eth2 ===>|"Direct Memory Map"| VPP
+
+        VPP <==>|"Standard K8s veth / TAP"| IPsec
+        IPsec ==>|"Routing Chain"| QoS
+        QoS ==>|"Routing Chain"| FW
+        FW ==>|"Routing Chain"| CASB
+        CASB -.->|"Packet processed,<br/>returns to VPP"| VPP
+    end
+
+    %% External Links (Binds the outside world to the Worker Node)
     vWAN <==>|"Encapsulated UDP/SRv6"| eth1
     NAT <==>|"Cleartext Decrypted"| eth2
     Infinity <.->|"Telemetry APIs"| eth0
 
-    %% INTERNAL HOST ROUTING MAP
-    eth1 ===>|"Direct Memory Map"| VPP
-    eth2 ===>|"Direct Memory Map"| VPP
-
-    %% SERVICE CHAIN (Top-to-Bottom Flow)
-    VPP <==>|"Standard K8s veth / TAP"| IPsec
-    IPsec ==>|"Routing Chain"| QoS
-    QoS ==>|"Routing Chain"| FW
-    FW ==>|"Routing Chain"| CASB
-    
-    %% Loop back
-    CASB -.->|"Packet processed,<br/>returns to VPP"| VPP
-
-    %% INVISIBLE ALIGNMENT (Forces the items to render beautifully side-by-side)
+    %% Enforce Alignment
     vWAN ~~~ NAT ~~~ Infinity
-    eth1 ~~~ eth2 ~~~ eth0
 ```
 
 ### Architectural Deep Dive
