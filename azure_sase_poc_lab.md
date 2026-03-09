@@ -51,7 +51,7 @@ graph TD
     AKS_VNET -.->|Customer Payload| NIC1
     
     NODE_OS -->|eth0 / K8s API| VPP
-    NIC1 ==>|eth1 / SR-IOV| VPP
+    NIC1 ==>|eth1 (Both Branches Terminate Here)| VPP
     MULTUS --> NODE_OS
     MULTUS --> NIC1
 ```
@@ -62,6 +62,10 @@ graph TD
 You might notice a difference between the full Check Point SASE diagram and this POC diagram regarding how the branches connect:
 *   **Production Check Point SASE (The Overlay):** In reality, the Quantum SD-WAN branch devices establish an encrypted **IPsec / ZTNA Tunnel** *directly* to the public IP of the Check Point VPP Pod inside the AKS cluster. 
 *   **This Educational POC (The Underlay):** To make learning easier without needing to configure complex IPsec/IKEv2 daemons on the open-source VPP router, this lab relies on Azure's native routing (VNet Peering to an Azure vWAN Hub) to deliver the raw traffic. 
+
+**Where do the Branches Terminate?**
+In both the real world and this POC, **all branches terminate on the exact same Pod and the exact same `eth1` interface.** 
+Because `eth1` is bound directly to the high-performance DPDK engine, it easily ingests traffic from hundreds or thousands of branches simultaneously. Inside the VPP Pod, the routing engine looks at the tunnel headers (in production: IPsec SPI; in this POC: Azure SDN attributes / inner IP) to assign the traffic to the correct internal VRF for Branch 1 vs. Branch 2.
 
 Both methods eventually result in the packet physically arriving at the Azure MANA NIC and being ingested by DPDK into the container. This lab simplifies the cryptography layer so you can focus strictly on learning the Kubernetes Multus & SR-IOV Data Plane mechanics.
 
