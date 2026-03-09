@@ -796,7 +796,7 @@ flowchart TD
     
     subgraph Azure_Underlay ["  Azure Native VNet Transport (Customer Dedicated VNet)  "]
         direction LR
-        VNet["Azure SDN / Hypervisor<br/>(Only sees standard UDP traffic between VMs)"]:::cloud
+        VNet["Azure Virtual Network<br/>(Only sees standard UDP traffic between VMs)"]:::cloud
     end
     
     Client -. "IPsec/SD-WAN" .-> Ingress
