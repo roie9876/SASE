@@ -911,68 +911,71 @@ This topology illustrates how two overlapping enterprise customers (`Customer A`
 flowchart TD
     %% Styling
     classDef azure fill:#0078D4,stroke:#fff,stroke-width:2px,color:#fff
-    classDef cp fill:#E3008C,stroke:#fff,stroke-width:2px,color:#fff
-    classDef cpa fill:#D81B60,stroke:#fff,stroke-width:2px,color:#fff
-    classDef cpb fill:#AD1457,stroke:#fff,stroke-width:2px,color:#fff
-    classDef hw fill:#505050,stroke:#fff,stroke-width:2px,color:#fff
+    classDef custA fill:#00796B,stroke:#fff,stroke-width:2px,color:#fff
+    classDef custB fill:#E64A19,stroke:#fff,stroke-width:2px,color:#fff
+    classDef hw fill:#424242,stroke:#fff,stroke-width:2px,color:#fff
     classDef aws fill:#FF9900,stroke:#fff,stroke-width:2px,color:#fff
+    classDef mgmt fill:#00ACC1,stroke:#fff,stroke-width:2px,color:#fff
 
-    subgraph AWS ["  AWS Management Cloud  "]
-        direction LR
+    subgraph AWS [" 🧠 AWS Management Cloud "]
         Infinity["Check Point Infinity Portal"]:::aws
     end
 
-    subgraph RegionA ["  Region A: AKS Cluster (East US)  "]
-        subgraph NodeA [" Azure Worker Node (BYO-CNI / Cilium) "]
-            SRIOV_A["Azure Physical NIC<br/>(SR-IOV Acceleration)"]:::hw
-            
-            PodA_CustA["Customer A Pod<br/>(VPP / DPDK)"]:::cpa
-            PodA_CustB["Customer B Pod<br/>(VPP / DPDK)"]:::cpb
-            
-            MgmtA["eth0: Azure CNI / Cilium"]:::azure
-            
-            %% Connections in Node A
-            PodA_CustA -. "eth0" .- MgmtA
-            PodA_CustB -. "eth0" .- MgmtA
-            
-            PodA_CustA == "eth1 (Multus)" === SRIOV_A
-            PodA_CustB == "eth1 (Multus)" === SRIOV_A
-        end
+    subgraph UsersA [" 🏢 Customer A Edge (Check Point SASE) "]
+        A_Branch["Branch Office<br/>(Quantum SD-WAN)"]:::custA
+        A_Home["Home User<br/>(Harmony Endpoint)"]:::custA
+        A_Campus["Campus Site<br/>(Quantum Gateway)"]:::custA
     end
 
-    subgraph Underlay ["  Microsoft Azure Global Backbone  "]
-        vWAN["Azure Virtual WAN (vWAN)<br/>(Blind to Customer IPs - Only routes standard UDP)"]:::azure
+    subgraph UsersB [" 🏢 Customer B Edge "]
+        B_Branch["Branch Office<br/>(Quantum SD-WAN)"]:::custB
     end
 
-    subgraph RegionB ["  Region B: AKS Cluster (West EU)  "]
-        subgraph NodeB [" Azure Worker Node (BYO-CNI / Cilium) "]
-            SRIOV_B["Azure Physical NIC<br/>(SR-IOV Acceleration)"]:::hw
-            
-            PodB_CustA["Customer A Pod<br/>(VPP / DPDK)"]:::cpa
-            PodB_CustB["Customer B Pod<br/>(VPP / DPDK)"]:::cpb
-            
-            MgmtB["eth0: Azure CNI / Cilium"]:::azure
-            
-            %% Connections in Node B
-            PodB_CustA -. "eth0" .- MgmtB
-            PodB_CustB -. "eth0" .- MgmtB
-            
-            PodB_CustA == "eth1 (Multus)" === SRIOV_B
-            PodB_CustB == "eth1 (Multus)" === SRIOV_B
-        end
+    subgraph RegionA [" 📍 Region A: Azure AKS (East US) "]
+        SRIOV_A["Azure Physical NIC<br/>(SR-IOV Acceleration)"]:::hw
+        
+        PodA_CustA["Customer A Pod<br/>(VPP / DPDK)"]:::custA
+        PodA_CustB["Customer B Pod<br/>(VPP / DPDK)"]:::custB
+        
+        MgmtA["eth0: Azure CNI / Cilium"]:::mgmt
+        
+        %% Pod connections inside Region A
+        PodA_CustA -. "eth0" .- MgmtA
+        PodA_CustB -. "eth0" .- MgmtA
+        PodA_CustA ==>|eth1 - Multus| SRIOV_A
+        PodA_CustB ==>|eth1 - Multus| SRIOV_A
     end
 
-    %% Edge Inputs
-    CustA_Edge["Customer A Branch<br/>(10.0.0.0/8)"] --> PodA_CustA
-    CustB_Edge["Customer B Branch<br/>(10.0.0.0/8)"] --> PodA_CustB
+    subgraph Underlay [" 🌐 Microsoft Azure Global Backbone "]
+        vWAN{"Azure Virtual WAN Hub<br/>(UDP Transport Only)"}:::azure
+    end
+
+    subgraph RegionB [" 📍 Region B: Azure AKS (West EU) "]
+        SRIOV_B["Azure Physical NIC<br/>(SR-IOV Acceleration)"]:::hw
+        
+        PodB_CustA["Customer A Pod<br/>(VPP / DPDK)"]:::custA
+        PodB_CustB["Customer B Pod<br/>(VPP / DPDK)"]:::custB
+        
+        MgmtB["eth0: Azure CNI / Cilium"]:::mgmt
+        
+        %% Pod connections inside Region B
+        PodB_CustA -. "eth0" .- MgmtB
+        PodB_CustB -. "eth0" .- MgmtB
+        SRIOV_B ==>|eth1 - Multus| PodB_CustA
+        SRIOV_B ==>|eth1 - Multus| PodB_CustB
+    end
+
+    %% Edge Connections to Region A
+    UsersA ==>|"IPsec / ZTNA Tunnels"| SRIOV_A
+    UsersB ==>|"IPsec Tunnels"| SRIOV_A
 
     %% API Connections
-    MgmtA -. "Control Plane APIs" .-> Infinity
-    MgmtB -. "Control Plane APIs" .-> Infinity
+    MgmtA -. "Telemetry & API" .-> Infinity
+    MgmtB -. "Telemetry & API" .-> Infinity
 
-    %% Data Plane Tunnels
-    SRIOV_A == "Over-The-Top UDP Tunnel<br/>(Encapsulated SRv6 & Overlapping IPs)" ==> vWAN
-    vWAN == "Over-The-Top UDP Tunnel<br/>(Encapsulated SRv6 & Overlapping IPs)" ==> SRIOV_B
+    %% Data Plane Tunnels Routing
+    SRIOV_A ==>|"UDP Encapsulated SRv6"| vWAN
+    vWAN ==>|"UDP Encapsulated SRv6"| SRIOV_B
 ```
 
 ### Architectural Deep Dive
