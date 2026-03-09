@@ -72,7 +72,7 @@ Zooming into **Region A**, this diagram explains the complex host-level networki
 Because underlying public cloud fabrics (like Azure) do not natively route SRv6 packets, Check Point must handle the complex SRv6-to-UDP encapsulation themselves. Instead of putting a VPP engine inside every single customer Pod (which creates immense overhead), Check Point utilizes a **Master VPP vRouter** deployed as a **DaemonSet** on the worker node. This Master VPP acts as the high-speed traffic cop, orchestrating the entire Service Chain across specialized Cloud-Native Network Function (CNF) Pods.
 
 ```mermaid
-flowchart TD
+flowchart LR
     %% Styling
     classDef azure fill:#0078D4,stroke:#fff,stroke-width:2px,color:#fff
     classDef vpp fill:#B71C1C,stroke:#fff,stroke-width:2px,color:#fff
@@ -81,46 +81,47 @@ flowchart TD
     classDef mgmt fill:#00ACC1,stroke:#fff,stroke-width:2px,color:#fff
     classDef net fill:#005A9E,stroke:#fff,stroke-width:2px,color:#fff
 
-    subgraph RegionA [" 📍 Azure AKS Worker Node (DaemonSet Architecture) "]
-        
-        SRIOV_WAN["Azure Physical NIC 1<br/>(Intranet Traffic via SR-IOV)"]:::hw
-        SRIOV_WWW["Azure Physical NIC 2<br/>(WWW Breakout via SR-IOV)"]:::hw
+    vWAN(("Azure vWAN<br/>(Intranet)")):::azure
+    NAT(("Azure NAT Gateway<br/>(Public WWW)")):::net
+    Infinity(("AWS Infinity Portal<br/>(Management)")):::mgmt
 
-        subgraph VPP_DS [" Master VPP vRouter (Host Network DaemonSet) "]
+    subgraph RegionA [" 📍 Azure AKS Worker Node (DaemonSet Architecture) "]
+        direction LR
+        
+        subgraph NICs [" Physical Interfaces "]
             direction TB
-            DPDK["DPDK Engine<br/>(Kernel Bypass Polling)"]:::vpp
-            VPP["VPP / SRv6 Router<br/>(UDP Encap / Decap)"]:::vpp
-            DPDK <--> VPP
+            eth0["eth0: Azure CNI<br/>(Management / Cilium)"]:::mgmt
+            eth1["eth1: SR-IOV VF<br/>(Intranet Traffic)"]:::hw
+            eth2["eth2: SR-IOV VF<br/>(WWW Breakout)"]:::hw
         end
 
-        subgraph ServiceChain [" Check Point Specialized Service Pods (Microservices) "]
-            direction LR
+        subgraph VPP_DS [" Master VPP DaemonSet "]
+            VPP["VPP vRouter Engine<br/>+ DPDK"]:::vpp
+        end
+
+        subgraph ServiceChain [" SASE Service Pods "]
+            direction TB
             IPsec["IPsec / WireGuard Pod"]:::pod
             QoS["QoS Pod"]:::pod
             FW["Firewall Pod"]:::pod
             CASB["CASB / SWG Pod"]:::pod
         end
 
-        %% Connections to NICs
-        SRIOV_WAN <-->|"Accelerated Networking (Bypass OS)"| DPDK
-        SRIOV_WWW <-->|"Accelerated Networking (Bypass OS)"| DPDK
-
-        %% High-speed links to Pods
-        VPP <-->|"memif / AF_XDP"| IPsec
+        %% Internal Links
+        eth1 <==>|"Kernel Bypass"| VPP
+        eth2 <==>|"Kernel Bypass"| VPP
+        
+        VPP <-->|"Standard K8s TAP/veth<br/>(No memif overlay)"| IPsec
         IPsec -. "Service Chain" .-> QoS
         QoS -. "Service Chain" .-> FW
         FW -. "Service Chain" .-> CASB
         CASB -. "Return to pipeline" .-> VPP
     end
-
-    %% External I/O
-    Infinity(("To: AWS Infinity Portal<br/>(Control Plane)")):::mgmt
-    vWAN(("To: Azure vWAN<br/>(Intranet Traffic)")):::azure
-    NAT(("To: Azure NAT Gateway<br/>(Public WWW Traffic)")):::net
     
-    RegionA -. "eth0 Control Plane Telemetry<br/>(Azure CNI / Cilium)" .-> Infinity
-    SRIOV_WAN ==>|"Encapsulated SRv6"| vWAN
-    SRIOV_WWW ==>|"Raw Cleartext NAT"| NAT
+    %% External Links
+    vWAN <==>|"Encapsulated SRv6"| eth1
+    NAT <==>|"Raw Cleartext NAT"| eth2
+    Infinity <.-. "Control Plane Telemetry" .-> eth0
 ```
 
 ### Architectural Deep Dive
@@ -128,9 +129,8 @@ flowchart TD
 #### 1. The VPP DaemonSet (Host Network)
 In a pure microservices SASE environment, placing the DPDK engine inside the worker node itself (as a DaemonSet running with `hostNetwork: true`) is highly efficient. The Master VPP vRouter binds directly to Azure's physical NICs via Accelerated Networking (SR-IOV). It processes the millions of raw packets hitting the server, unwraps the IPv4 UDP transport tunnels, reads the inner SRv6 headers, and routes the traffic to the appropriate security pod.
 
-#### 2. High-Speed Service Chaining (Kernel Bypass)
-A SASE inspection pipeline requires multiple specialized engines (IPsec/WireGuard termination, QoS traffic shaping, Firewall/IPS inspection, and CASB/SWG proxies). If these are separated into individual Pods, standard Kubernetes routing (`kube-proxy` or standard `veth` pairs) is far too slow for service chaining.
-To solve this, the VPP vRouter utilizes high-speed memory interfaces like **`memif`** (Shared Memory Interface) or **`AF_XDP`**. When the VPP router needs to send a packet to the IPsec Pod, and then from the IPsec Pod to the Firewall Pod, it does not send it over a traditional Linux network stack. Instead, the pods read and write the packets directly into exact shared RAM blocks on the same physical motherboard, achieving zero-copy transfer speeds.
+#### 2. High-Speed Service Chaining (Standard Interfaces)
+A SASE inspection pipeline requires multiple specialized engines (IPsec/WireGuard termination, QoS traffic shaping, Firewall/IPS inspection, and CASB/SWG proxies). If the underlying product architecture does not support custom shared-memory interfaces like **`memif`** (which requires heavy application rewrites to support memory-mapped datapath transfers), the VPP DaemonSet falls back to routing traffic into the specialized Pods using highly optimized **standard Linux virtual interfaces** (like `veth` pairs or `TAP` interfaces tuned for DPDK). The VPP DaemonSet acts as the central traffic switch, ensuring traffic reliably hops between the Pods. 
 
 #### 3. Overcoming Azure vWAN & IPv6 Overlap Limitations
 Azure vWAN is an incredibly powerful global transit layer, but it is deeply intolerant of overlapping BGP IPv4 spaces. In our diagram, multiple customers use `10.0.0.0/8`. 
