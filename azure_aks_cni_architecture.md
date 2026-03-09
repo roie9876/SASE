@@ -139,14 +139,14 @@ graph TD
     Cilium --> eth0
 
     %% The Fast Path (eth1 & eth2)
-    VF1 ==>|PCIe Passthrough (Bypasses vSwitch)| PCIe_1
-    VF2 ==>|PCIe Passthrough (Bypasses vSwitch)| PCIe_2
+    VF1 == "PCIe Passthrough (Bypasses vSwitch)" ==> PCIe_1
+    VF2 == "PCIe Passthrough (Bypasses vSwitch)" ==> PCIe_2
 
-    PCIe_1 ==>|Discovered by| Multus
-    PCIe_2 ==>|Discovered by| Multus
+    PCIe_1 == "Discovered by" ==> Multus
+    PCIe_2 == "Discovered by" ==> Multus
 
-    Multus ==>|Direct PCIe Injection via CRD| eth1
-    Multus ==>|Direct PCIe Injection via CRD| eth2
+    Multus == "Direct PCIe Injection via CRD" ==> eth1
+    Multus == "Direct PCIe Injection via CRD" ==> eth2
 ```
 
 ### The Slicing Process Explained:

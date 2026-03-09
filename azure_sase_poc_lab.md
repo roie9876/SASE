@@ -59,13 +59,13 @@ graph TD
     AKS_VNET -->|Mgmt Traffic| NODE_OS
     AKS_VNET -.->|Customer Payload| NIC1
     
-    NODE_OS -->|eth0 / K8s API| VPP
-    NIC1 ==>|eth1 - Both Branches Terminate Here| VPP
+    NODE_OS -->|"eth0 / K8s API"| VPP
+    NIC1 == "eth1 - Both Branches Terminate Here" ==> VPP
     MULTUS --> NODE_OS
     MULTUS --> NIC1
     
-    VRF_A ==>|veth pair / tap| PODA
-    VRF_B ==>|veth pair / tap| PODB
+    VRF_A == "veth pair / tap" ==> PODA
+    VRF_B == "veth pair / tap" ==> PODB
 ```
 
 ---
