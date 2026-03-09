@@ -72,7 +72,7 @@ Zooming into **Region A**, this diagram explains the complex host-level networki
 Because underlying public cloud fabrics (like Azure) do not natively route SRv6 packets, Check Point must handle the complex SRv6-to-UDP encapsulation themselves. Instead of putting a VPP engine inside every single customer Pod (which creates immense overhead), Check Point utilizes a **Master VPP vRouter** deployed as a **DaemonSet** on the worker node. This Master VPP acts as the high-speed traffic cop, orchestrating the entire Service Chain across specialized Cloud-Native Network Function (CNF) Pods.
 
 ```mermaid
-flowchart LR
+flowchart TD
     %% Styling
     classDef azure fill:#0078D4,stroke:#fff,stroke-width:2px,color:#fff
     classDef vpp fill:#B71C1C,stroke:#fff,stroke-width:2px,color:#fff
@@ -81,47 +81,49 @@ flowchart LR
     classDef mgmt fill:#00ACC1,stroke:#fff,stroke-width:2px,color:#fff
     classDef net fill:#005A9E,stroke:#fff,stroke-width:2px,color:#fff
 
-    vWAN(("Azure vWAN<br/>(Intranet)")):::azure
-    NAT(("Azure NAT Gateway<br/>(Public WWW)")):::net
-    Infinity(("AWS Infinity Portal<br/>(Management)")):::mgmt
-
-    subgraph RegionA [" 📍 Azure AKS Worker Node (DaemonSet Architecture) "]
+    subgraph External [" ☁️ External Cloud Dependencies "]
         direction LR
+        vWAN(("Azure vWAN<br/>(Intranet)")):::azure
+        NAT(("Azure NAT Gateway<br/>(Public WWW)")):::net
+        Infinity(("AWS Infinity Portal<br/>(Management)")):::mgmt
+    end
+
+    subgraph RegionA [" 📍 Azure AKS Worker Node (Master VPP Architecture) "]
+        direction TD
         
-        subgraph NICs [" Physical Interfaces "]
-            direction TB
-            eth0["eth0: Azure CNI<br/>(Management / Cilium)"]:::mgmt
+        subgraph NICs [" 1. Physical Host Interfaces "]
+            direction LR
             eth1["eth1: SR-IOV VF<br/>(Intranet Traffic)"]:::hw
             eth2["eth2: SR-IOV VF<br/>(WWW Breakout)"]:::hw
+            eth0["eth0: Azure CNI<br/>(Mgmt / Cilium)"]:::mgmt
         end
 
-        subgraph VPP_DS [" Master VPP DaemonSet "]
-            VPP["VPP vRouter Engine<br/>+ DPDK"]:::vpp
-        end
+        VPP["2. Master VPP DaemonSet<br/>(vRouter Engine + DPDK Kernel Bypass)"]:::vpp
 
-        subgraph ServiceChain [" SASE Service Pods "]
-            direction TB
-            IPsec["IPsec / WireGuard Pod"]:::pod
-            QoS["QoS Pod"]:::pod
-            FW["Firewall Pod"]:::pod
-            CASB["CASB / SWG Pod"]:::pod
+        subgraph ServiceChain [" 3. Specialized SASE Service Pods (Standard K8s Interfaces) "]
+            direction LR
+            IPsec["IPsec / WireGuard"]:::pod
+            QoS["QoS Traffic Shaping"]:::pod
+            FW["Firewall Inspection"]:::pod
+            CASB["CASB / SWG Proxy"]:::pod
+            
+            IPsec -.->|"Chain"| QoS -.->|"Chain"| FW -.->|"Chain"| CASB
         end
-
-        %% Internal Links
-        eth1 <==>|"Kernel Bypass"| VPP
-        eth2 <==>|"Kernel Bypass"| VPP
         
-        VPP <-->|"Standard K8s TAP/veth<br/>(No memif overlay)"| IPsec
-        IPsec -. "Service Chain" .-> QoS
-        QoS -. "Service Chain" .-> FW
-        FW -. "Service Chain" .-> CASB
-        CASB -. "Return to pipeline" .-> VPP
+        %% Internal Links Bottom-Up / Top-Down
+        NICs === VPP
+        VPP <==>|"veth/TAP interfaces"| IPsec
+        CASB -.->|"Return to pipeline"| VPP
     end
     
-    %% External Links
+    %% External Links (Connecting the structural blocks)
     vWAN <==>|"Encapsulated SRv6"| eth1
     NAT <==>|"Raw Cleartext NAT"| eth2
-    eth0 <.->|"Control Plane Telemetry"| Infinity
+    Infinity <.->|"Control Plane Telemetry"| eth0
+
+    %% Provide order for clean rendering
+    External --> RegionA
+    linkStyle 8 stroke-width:0px;
 ```
 
 ### Architectural Deep Dive
