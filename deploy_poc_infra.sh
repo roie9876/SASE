@@ -34,19 +34,19 @@ az network vnet create --resource-group $RG_NAME --name $BRANCH2_VNET --address-
 az network vnet create --resource-group $RG_NAME --name $AKS_VNET --address-prefix $AKS_CIDR --subnet-name default --subnet-prefix $AKS_SUBNET
 
 # ==============================================================================
-echo "2. Deploying Branch VMs (Standard_B1s)..."
+echo "2. Deploying Branch VMs (Standard_B2s)..."
 # ==============================================================================
 # Generate SSH keys if they don't exist
 # Branch 1
 az vm create --resource-group $RG_NAME --name "Branch1-VM" \
   --vnet-name $BRANCH1_VNET --subnet default \
-  --image Ubuntu2204 --size Standard_B1s \
+  --image Ubuntu2204 --size Standard_B2s \
   --admin-username adminuser --generate-ssh-keys --no-wait
 
 # Branch 2
 az vm create --resource-group $RG_NAME --name "Branch2-VM" \
   --vnet-name $BRANCH2_VNET --subnet default \
-  --image Ubuntu2204 --size Standard_B1s \
+  --image Ubuntu2204 --size Standard_B2s \
   --admin-username adminuser --no-wait
 
 # ==============================================================================
