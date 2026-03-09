@@ -51,7 +51,7 @@ graph TD
     AKS_VNET -.->|Customer Payload| NIC1
     
     NODE_OS -->|eth0 / K8s API| VPP
-    NIC1 ==>|eth1 (Both Branches Terminate Here)| VPP
+    NIC1 ==>|eth1 - Both Branches Terminate Here| VPP
     MULTUS --> NODE_OS
     MULTUS --> NIC1
 ```
