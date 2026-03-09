@@ -119,7 +119,7 @@ flowchart TD
 
 #### 1. Multi-NIC Pods (Management, Intranet, and WWW)
 To satisfy Telco-grade throughput and separate security domains, the SASE Pods require three distinct interfaces utilizing **Multus CNI**:
-*   **`eth0` (Management):** Connected via standard **Azure CNI Powered by Cilium**. This provides highly secure, eBPF-based Kubernetes network policies for Control Plane telemetry. It reports back to the Infinity Portal in AWS.
+*   **`eth0` (Management):** Connected via standard **Azure CNI Powered by Cilium**. This provides highly secure, eBPF-based Kubernetes network policies for Control Plane telemetry. It handles *all* management traffic, including pushing configuration data, communicating with other local in-cluster management services, and reporting to external management planes like the Check Point Infinity Portal in AWS.
 *   **`eth1` (Intranet Data Plane):** Dedicated entirely to raw Check Point customer payload destined for the internal SD-WAN. Traffic is encapsulated in UDP/SRv6 and pushed to Azure vWAN.
 *   **`eth2` (WWW Data Plane):** Dedicated entirely to Public Internet browsing (SaaS, Video, Web). Traffic is natively NATted by VPP and pushed directly to an Azure NAT Gateway. **This bypasses vWAN entirely, saving massive bandwidth costs.**
 
@@ -132,4 +132,4 @@ Azure vWAN is an incredibly powerful global transit layer, but it is deeply into
 *   **The "Over-The-Top" Solution:** Check Point utilizes vWAN strictly as a physical transport. The VPP pod logic isolates the overlapping IPv4 payloads, wraps them in SRv6 routing logic, and finally encapsulates the entire data structure inside a standard IPv4 UDP packet. Azure vWAN routes the encapsulating UDP packet seamlessly across global regions without ever touching the sensitive overlapping customer data hidden inside.
 
 #### 4. The Role of Azure CNI Powered by Cilium
-If an ISV prefers not to build their own CNI from scratch (BYO-CNI), **Azure CNI Powered by Cilium** is the recommended default for the `eth0` control plane. Cilium utilizes eBPF (Extended Berkeley Packet Filter) to provide extremely lightweight, highly scalable network policies and observability. It tightly locks down the management plane of the Pod ensuring it can only communicate with the authorized AWS APIs, leaving `eth1` completely unbound for raw data transit.
+If an ISV prefers not to build their own CNI from scratch (BYO-CNI), **Azure CNI Powered by Cilium** is the recommended default for the `eth0` control plane. Cilium utilizes eBPF (Extended Berkeley Packet Filter) to provide extremely lightweight, highly scalable network policies and observability. It tightly locks down the management plane of the Pod, ensuring it can securely communicate with necessary cluster-internal services and authorized external endpoints (like AWS Management APIs), while leaving the `eth1` and `eth2` data paths completely unbound for raw high-speed transit.
