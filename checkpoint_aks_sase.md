@@ -82,26 +82,22 @@ flowchart TD
     classDef net fill:#005A9E,stroke:#fff,stroke-width:2px,color:#fff
 
     subgraph External [" ☁️ External Cloud Dependencies "]
-        direction LR
         vWAN(("Azure vWAN<br/>(Intranet)")):::azure
         NAT(("Azure NAT Gateway<br/>(Public WWW)")):::net
         Infinity(("AWS Infinity Portal<br/>(Management)")):::mgmt
     end
 
     subgraph RegionA [" 📍 Azure AKS Worker Node (Master VPP Architecture) "]
-        direction TD
         
         subgraph NICs [" 1. Physical Host Interfaces "]
-            direction LR
             eth1["eth1: SR-IOV VF<br/>(Intranet Traffic)"]:::hw
             eth2["eth2: SR-IOV VF<br/>(WWW Breakout)"]:::hw
             eth0["eth0: Azure CNI<br/>(Mgmt / Cilium)"]:::mgmt
         end
 
-        VPP["2. Master VPP DaemonSet<br/>(vRouter Engine + DPDK Kernel Bypass)"]:::vpp
+        VPP["2. Master VPP DaemonSet<br/>(vRouter Engine + DPDK)"]:::vpp
 
-        subgraph ServiceChain [" 3. Specialized SASE Service Pods (Standard K8s Interfaces) "]
-            direction LR
+        subgraph ServiceChain [" 3. Specialized SASE Service Pods "]
             IPsec["IPsec / WireGuard"]:::pod
             QoS["QoS Traffic Shaping"]:::pod
             FW["Firewall Inspection"]:::pod
@@ -118,8 +114,8 @@ flowchart TD
     
     %% External Links (Connecting the structural blocks)
     vWAN <==>|"Encapsulated SRv6"| eth1
-    NAT <==>|"Raw Cleartext NAT"| eth2
-    Infinity <.->|"Control Plane Telemetry"| eth0
+    NAT <==>|"Raw Cleartext"| eth2
+    Infinity <.->|"Control Plane"| eth0
 
     %% Provide order for clean rendering
     External --> RegionA
