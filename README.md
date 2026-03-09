@@ -303,21 +303,24 @@ Represented by the **blue** boxes in the diagram.
 Represented by the **pink** boxes in the diagram.
 *   **What it is:** The proprietary software network created by the ISV running high-performance routing software (like FD.io VPP or DPDK) inside the Azure VMs provisioned in the customer's tenant environment. 
 *   **Its purpose:** To provide the carrier-grade routing features that Azure lacks. The NVAs establish "tunnels" (like UDP, VXLAN, or IPsec) between each other over the Azure underlay. 
-*   **The magic:** All of the advanced edge features—such as BGP peering with branch routers, **service chaining between SASE products (routing natively from SD-WAN Gateway to FWaaS to SWG to CASB)**, SRv6 traffic engineering, deep packet inspection (DPI), and zero-trust policies—happen strictly *inside* these pink overlay boxes (or across local container interfaces) and tunnels. By encapsulating our smart (SRv6) traffic inside "dumb" UDP packets, the underlay never sees the complexity, and simply routes the UDP packets from one component to another.
+*   **The magic:** All of the advanced edge features—such as BGP peering with branch routers, **service chaining between SASE products (routing natively from SD-WAN Gateway to FWaaS to SWG to CASB)**, SRv6 traffic engineering, deep packet inspection (DPI), and zero-trust policies—happen strictly *inside* these pink overlay boxes (or across local container interfaces) and tunnels.
 
----
+#### 3. The Engineering Motivation: Why use IPv6 (SRv6) at the core?
+Looking at Check Point's architecture, you might wonder: *why bother using IPv6 for the underlying infrastructure instead of standard IPv4?* Utilizing **SRv6 (Segment Routing over IPv6)** is actually a massive engineering "cheat code" for SASE providers:
 
-## Azure Underlay Limitations & ISV SASE Workarounds
+*   **Programmable Packets (Service Chaining):** Unlike IPv4 which has a rigid header, IPv6 was built with Extension Headers. SRv6 allows the SASE Gateway to program the exact service chain *directly into the packet itself*. Instead of configuring complex stateful routing (PBR) hop-by-hop, the packet carries instructions: *"Take me to the CloudGuard Firewall (SID 1), then Harmony Browse (SID 2), then out to the Internet (SID 3)."*
+*   **Solving the Multi-Tenant Overlapping IP Nightmare:** 99% of enterprise customers use the exact same private IPv4 ranges (`10.0.0.0/8`). If Check Point had to route hundreds of customers over an IPv4 core, it would require CPU-heavy and highly complex Network Address Translation (NAT) / VRF isolation. By wrapping customer payloads inside a massive IPv6 overlay, every tenant, branch, and user gets a globally unique, collision-free routing space while keeping their internal `10.x` addresses undisturbed.
+*   **Stateless, Highly Scalable Core:** Because the SRv6 header dictates the path, intermediate core routers don't need to learn massive tracking tables for every single session flow limit. They simply read the outer destination IPv6 address and forward it blindly. This makes scaling the global PoPs incredibly fast and resilient.
 
-When building our own SASE platform on top of public cloud networks, we need to understand the behaviors and limitations of the cloud provider’s underlying Software Defined Network (SDN). Because Azure's SDN is heavily protected, an ISV must build an **overlay architecture** to achieve the following carrier-grade capabilities.
+#### 4. The Azure "UDP Smuggling" Trick
+While the benefits of IPv6/SRv6 are immense, we hit a massive wall in the cloud: **Azure's native SDN hates custom headers and will instantly drop SRv6 packets.**
 
-Here are the core concepts and how we adapt them for Azure:
+To execute this architecture in Azure, SASE architectures rely on **UDP Encapsulation (Smuggling)**:
+1.  **The Wrapper:** When the SASE Gateway needs to route the advanced IPv6 packet to the Firewall engine, it takes the entire SRv6 packet and wraps it inside a standard `UDP` packet.
+2.  **The Delivery:** It hands that payload to the Azure Virtual Network. Azure acts completely blind—it just thinks, *"Oh, a standard UDP packet heading to VM #2,"* and happily forwards it across the backbone.
+3.  **The Unwrapping:** When it hits the destination Check Point VM, the software strips the outer UDP wrapper, exposes the magical SRH (Segment Routing Header), and natively executes the zero-trust security checks.
 
-### 1. Native SRv6
-**Concept:** Native support for Segment Routing over IPv6 in the cloud network fabric. Allows encoding the forwarding path inside the packet using SRv6 segments. Enables service chaining, traffic engineering, and programmable routing without MPLS.
-**The Azure Challenge:** Azure's native SDN does not expose or support Native SRv6 routing capabilities for tenant payloads.
-**The Workaround:** All SRv6 logic must be handled in our proprietary software layer (inside the NVAs), independent of the Azure underlay.
-
+By treating Azure purely as "dumb plumbing", Check Point successfully bridges all the carrier-grade benefits of IPv6 without fighting Microsoft's hypervisor limitations.
 ### 2. IPv6 SRH Pass-Through
 **Concept:** Ability for the cloud network to forward IPv6 packets that contain the Segment Routing Header (SRH) without dropping or stripping it. Required if SRv6 packets traverse the provider network unchanged.
 **The Azure Challenge:** Azure's hypervisor (vSwitch) drops IPv6 packets that contain an SRH header to prevent potential security vectors or parsing bugs in hardware load balancers.
