@@ -21,28 +21,28 @@ graph TD
     classDef app fill:#e1bee7,stroke:#333,stroke-width:2px,color:#000
 
     subgraph Simulated Branches
-        B1[Branch 1 VM\nIP: 192.168.1.10]:::branch
-        B2[Branch 2 VM\nIP: 192.168.1.10\nOverlapping IP!]:::branch
+        B1["Branch 1 VM<br/>IP: 192.168.1.10"]:::branch
+        B2["Branch 2 VM<br/>IP: 192.168.1.10<br/>(Overlapping IP!)"]:::branch
     end
 
     subgraph Azure Backbone
-        vWAN((Azure Virtual WAN Hub\nHandles BGP & Routing)):::azure
+        vWAN(("Azure Virtual WAN Hub<br/>Handles BGP & Routing")):::azure
         
         B1 -->|IPsec/VNet Peering| vWAN
         B2 -->|IPsec/VNet Peering| vWAN
     end
 
     subgraph AKS SASE Hub Cluster
-        AKS_VNET[AKS VNet\n10.100.0.0/16]:::azure
+        AKS_VNET["AKS VNet<br/>10.100.0.0/16"]:::azure
         
         subgraph Worker Node - Standard_D4s_v5
-            NODE_OS[Ubuntu Linux Kernel\nAzure CNI / Cilium]:::aks
-            NIC1[Physical MANA NIC\nAccelerated Networking]:::aks
+            NODE_OS["Ubuntu Linux Kernel<br/>Azure CNI / Cilium"]:::aks
+            NIC1["Physical MANA NIC<br/>Accelerated Networking"]:::aks
             
             MULTUS((Multus CNI Orchestrator))
             
             subgraph Open Source VPP Pod
-                VPP[FD.io VPP \nKernel Bypass DPDK]:::pod
+                VPP["FD.io VPP<br/>Kernel Bypass DPDK"]:::pod
                 VRF_A{VRF A}
                 VRF_B{VRF B}
                 
@@ -50,8 +50,8 @@ graph TD
                 VPP --- VRF_B
             end
             
-            PODA[Customer A Dummy Pod \n IP: 10.0.0.5]:::app
-            PODB[Customer B Dummy Pod \n IP: 10.0.0.5 \n Overlapping Internal IP!]:::app
+            PODA["Customer A Dummy Pod<br/>IP: 10.0.0.5"]:::app
+            PODB["Customer B Dummy Pod<br/>IP: 10.0.0.5<br/>(Overlapping Internal IP!)"]:::app
         end
     end
 
