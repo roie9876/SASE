@@ -20,28 +20,28 @@ graph TD
     classDef pod fill:#ffcc80,stroke:#333,stroke-width:2px,color:#000
     classDef app fill:#e1bee7,stroke:#333,stroke-width:2px,color:#000
 
-    subgraph Simulated Branches
+    subgraph branches ["Simulated Branches"]
         B1["Branch 1 VM<br/>IP: 192.168.1.10"]:::branch
         B2["Branch 2 VM<br/>IP: 192.168.1.10<br/>(Overlapping IP!)"]:::branch
     end
 
-    subgraph Azure Backbone
+    subgraph backbone ["Azure Backbone"]
         vWAN(("Azure Virtual WAN Hub<br/>Handles BGP & Routing")):::azure
         
         B1 -->|IPsec/VNet Peering| vWAN
         B2 -->|IPsec/VNet Peering| vWAN
     end
 
-    subgraph AKS SASE Hub Cluster
+    subgraph akshub ["AKS SASE Hub Cluster"]
         AKS_VNET["AKS VNet<br/>10.100.0.0/16"]:::azure
         
-        subgraph Worker Node - Standard_D4s_v5
+        subgraph workernode ["Worker Node - Standard_D4s_v5"]
             NODE_OS["Ubuntu Linux Kernel<br/>Azure CNI / Cilium"]:::aks
             NIC1["Physical MANA NIC<br/>Accelerated Networking"]:::aks
             
             MULTUS((Multus CNI Orchestrator))
             
-            subgraph Open Source VPP Pod
+            subgraph vpppod ["Open Source VPP Pod"]
                 VPP["FD.io VPP<br/>Kernel Bypass DPDK"]:::pod
                 VRF_A{VRF A}
                 VRF_B{VRF B}

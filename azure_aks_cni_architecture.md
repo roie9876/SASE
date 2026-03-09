@@ -20,13 +20,13 @@ graph TD
     classDef bypass fill:#ffcdd2,stroke:#333,stroke-width:4px,color:#000
     classDef container fill:#c8e6c9,stroke:#333,stroke-width:2px,color:#000
 
-    subgraph Azure Hardware
+    subgraph azureHw ["Azure Hardware"]
         NIC0[Standard Azure vNIC]:::hardware
         NIC1[Physical MANA NIC 1]:::hardware
         NIC2[Physical MANA NIC 2]:::hardware
     end
 
-    subgraph AKS Worker Node OS
+    subgraph aksWorker ["AKS Worker Node OS"]
         KERNEL[Linux Kernel Routing & eBPF Maps]:::kernel
         DPDK1[DPDK Kernel Bypass Direct Memory Map]:::bypass
         DPDK2[DPDK Kernel Bypass Direct Memory Map]:::bypass
@@ -36,7 +36,7 @@ graph TD
         NIC2 -.->|Virtual Function mapping| DPDK2
     end
 
-    subgraph Master VPP DaemonSet
+    subgraph masterVPP ["Master VPP DaemonSet"]
         VPP[Check Point VPP vRouter]:::container
         
         KERNEL -->|eth0 - Mgmt/API| VPP
@@ -44,7 +44,7 @@ graph TD
         DPDK2 ==>|eth2 - Data Plane Internet| VPP
     end
 
-    subgraph Kubernetes Networking Ecosystem
+    subgraph k8sNet ["Kubernetes Networking Ecosystem"]
         MULTUS[Multus Meta-CNI Orchestrator]
         AZURE_CNI[Azure CNI powered by Cilium]
         SRIOV[SR-IOV Network Device Plugin]
@@ -103,7 +103,7 @@ graph TD
     classDef k8s fill:#c8e6c9,stroke:#333,stroke-width:2px,color:#000
     classDef pod fill:#ffcc80,stroke:#333,stroke-width:2px,color:#000
 
-    subgraph Azure Datacenter Rack
+    subgraph dataCenter ["Azure Datacenter Rack"]
         SmartNIC["Physical SmartNIC (Mellanox/MANA)<br>100+ Gbps"]:::hardware
         PF["Physical Function (PF)"]:::hardware
         VF1["Virtual Function 1 (VF)"]:::hardware
@@ -114,19 +114,19 @@ graph TD
         SmartNIC --- VF2
     end
 
-    subgraph AKS Worker Node OS (Standard_D4s_v5)
+    subgraph workerOS ["AKS Worker Node OS (Standard_D4s_v5)"]
         vSwitch["Azure Virtual Switch (Hyper-V)"]:::virtual
         OS_NIC["Primary Azure VM NIC (VM level)"]:::virtual
         PCIe_1["PCIe Device mapped to /dev/vfio/1"]:::hardware
         PCIe_2["PCIe Device mapped to /dev/vfio/2"]:::hardware
     end
 
-    subgraph Kubernetes Networking Ecosystem
+    subgraph k8sEcosystem ["Kubernetes Networking Ecosystem"]
         Cilium["Azure CNI / Cilium<br>(Standard Networking)"]:::k8s
         Multus["Multus CNI + SR-IOV Plugin<br>(Hardware Plumber)"]:::k8s
     end
 
-    subgraph Check Point VPP Pod
+    subgraph vppPod ["Check Point VPP Pod"]
         eth0["eth0<br>Mgmt & K8s API"]:::pod
         eth1["eth1<br>Internal/LAN DPDK"]:::pod
         eth2["eth2<br>External/WAN DPDK"]:::pod
