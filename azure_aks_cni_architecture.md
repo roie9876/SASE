@@ -45,9 +45,9 @@ graph TD
     end
 
     subgraph Kubernetes Networking Ecosystem
-        MULTUS((Multus Meta-CNI Orchestrator))
-        AZURE_CNI(Azure CNI powered by Cilium)
-        SRIOV(SR-IOV Network Device Plugin)
+        MULTUS[Multus Meta-CNI Orchestrator]
+        AZURE_CNI[Azure CNI powered by Cilium]
+        SRIOV[SR-IOV Network Device Plugin]
         
         MULTUS -->|Configures eth0| AZURE_CNI
         MULTUS -->|Configures eth1/eth2| SRIOV
