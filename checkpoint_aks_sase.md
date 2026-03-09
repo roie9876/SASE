@@ -121,7 +121,7 @@ flowchart LR
     %% External Links
     vWAN <==>|"Encapsulated SRv6"| eth1
     NAT <==>|"Raw Cleartext NAT"| eth2
-    Infinity <.-. "Control Plane Telemetry" .-> eth0
+    eth0 <.->|"Control Plane Telemetry"| Infinity
 ```
 
 ### Architectural Deep Dive
@@ -136,6 +136,7 @@ A SASE inspection pipeline requires multiple specialized engines (IPsec/WireGuar
 Azure vWAN is an incredibly powerful global transit layer, but it is deeply intolerant of overlapping BGP IPv4 spaces. In our diagram, multiple customers use `10.0.0.0/8`. 
 *   **The Problem:** If Check Point injected those overlapping routes directly into the Azure vWAN Hub, the Azure BGP tables would instantly collide. Furthermore, if the VPP engine transmits a raw **SRv6** packet, Azure's physical switches would simply drop the custom headers.
 *   **The "Over-The-Top" Solution:** Check Point utilizes vWAN strictly as a physical transport. The VPP DaemonSet isolates the overlapping IPv4 payloads, wraps them in SRv6 routing logic, and finally encapsulates the entire data structure inside a standard IPv4 UDP packet. Azure vWAN routes the encapsulating UDP packet seamlessly across global regions without ever touching the sensitive overlapping customer data hidden inside.
+*   **The Tenant ID Routing:** When the packet reaches the destination region, the remote worker node's Master VPP DaemonSet strips off the outer IPv4 UDP shell, reads the internal SRv6 header, and extracts the **Tenant ID (VRF)**. The VPP engine uses this Tenant ID to immediately place the packet into the correct customer's isolated routing table and service chain, completely oblivious to Azure's underlying infrastructure.
 
 #### 4. The Separation of Cloud (WWW) and Intranet (vWAN)
 The VPP routing logic actively splits datapath traffic locally at the node:
