@@ -8,13 +8,15 @@ This document consolidates Azure's network hardware documentation into actionabl
 
 ## 1. The "B-Series" Question: Can we use Azure B-Series VMs?
 
-**Short Answer: Absolutely not. It will cause a catastrophic failure.**
+**Short Answer: Absolutely not. It will cause a catastrophic network collapse.**
 
-While B-Series (Burstable) VMs are highly cost-effective for Dev/Test web workloads, they break almost every requirement for a DPDK/VPP data plane:
-1.  **No SR-IOV Support:** B-Series VMs do not support **Accelerated Networking** (Azure's implementation of SR-IOV). Without Accelerated Networking, network traffic must bridge through the Azure Hyper-V virtual switch (the host OS), killing performance and completely preventing DPDK kernel bypass.
-2.  **CPU Credit Exhaustion:** DPDK operates in "Polling Mode." It pins a CPU core at **100% utilization in an infinite loop**, constantly watching RAM for new packets. A B-Series VM runs on "CPU Credits." The VPP engine would consume all CPU credits within minutes of booting, causing Azure to aggressively throttle the CPU down to baseline (e.g., 10% of a core). The DPDK engine would instantly stall, dropping all customer traffic.
+While the newer **Bsv2-series** (Burstable v2) VMs *do* now officially support Accelerated Networking (SR-IOV / MANA) and advertise decent NIC throughput (e.g., 6.25 Gbps), they are still fundamentally incompatible with DPDK/VPP architectures due to how their CPUs process math:
+1.  **CPU Credit Exhaustion vs DPDK Polling:** Regular Linux networking (`kube-proxy` / `iptables`) uses CPU dynamically—when a packet arrives, the CPU wakes up, processes it, and goes back to sleep. A B-Series VM accumulates "CPU Credits" while asleep. 
+However, **DPDK operates in "Polling Mode."** It intentionally pins a CPU core at **100% utilization in an infinite loop**, constantly watching the RAM for new packets to achieve zero-latency forwarding.
+2.  **The Catastrophic Failure:** Because the Master VPP DaemonSet will run the CPU at 100% permanently, a Bsv2 VM will burn through its entire bank of CPU credits within minutes of booting. Once the credits hit zero, Azure's hypervisor will aggressively throttle the physical CPU down to its baseline performance (e.g., 10% to 20% of a core). 
+3.  **The Result:** The DPDK engine will instantly stall. Polling will slow to a crawl, and the VPP engine will begin blindly dropping millions of customer packets on the floor because the throttled CPU physically cannot read the memory buffer fast enough.
 
-**Requirement:** You must use **Compute-Optimized (Fsv2, Fsv3)** or **General Purpose (Dsv4, Dsv5)** series VMs with a minimum of 8 vCPUs to support the necessary network throughput limits and Accelerated Networking features.
+**Requirement:** You must use **Compute-Optimized (Fsv2, Fsv3)** or **General Purpose (Dsv4, Dsv5)** series VMs with a minimum of 8 vCPUs. These instances guarantee 100% sustained, unthrottled CPU clock cycles permanently, which is mandatory for DPDK polling loops.
 
 ---
 
