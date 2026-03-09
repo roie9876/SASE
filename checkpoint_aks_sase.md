@@ -137,10 +137,17 @@ Azure vWAN is an incredibly powerful global transit layer, but it is deeply into
 *   **The "Over-The-Top" Solution:** Check Point utilizes vWAN strictly as a physical transport. The VPP DaemonSet isolates the overlapping IPv4 payloads, wraps them in SRv6 routing logic, and finally encapsulates the entire data structure inside a standard IPv4 UDP packet. Azure vWAN routes the encapsulating UDP packet seamlessly across global regions without ever touching the sensitive overlapping customer data hidden inside.
 *   **The Tenant ID Routing:** When the packet reaches the destination region, the remote worker node's Master VPP DaemonSet strips off the outer IPv4 UDP shell, reads the internal SRv6 header, and extracts the **Tenant ID (VRF)**. The VPP engine uses this Tenant ID to immediately place the packet into the correct customer's isolated routing table and service chain, completely oblivious to Azure's underlying infrastructure.
 
-#### 4. The Separation of Cloud (WWW) and Intranet (vWAN)
+#### 4. Managing 10,000+ Customer Routes: Fast Path & Slow Path Architecture
+A massive cloud-native SASE deployment cannot hold every possible BGP route, for tens of thousands of tenants with overlapping subnets, inside the active memory of every single worker node's VPP engine. Doing so would exhaust the RAM (Hugepages) and destroy lookup speeds. Check Point solves this "Big Table" problem through a strict **Fast Path / Slow Path** flow caching design:
+
+*   **The Slow Path (Punt on Cache Miss):** When the very *first* packet of a new customer connection arrives at the `eth1` physical data plane, the Master VPP DaemonSet's cache has no idea where to send it. This is a "Cache Miss". The VPP engine immediately "punts" this single packet up to an intelligent **Packet Path Classifier** (the Control Plane routing brain). This classifier does the heavy lifting: it identifies the customer's Tenant ID, looks up their specific VRF mapping, determines the exact security Microservice Chain (e.g., IPsec -> Firewall -> CASB) required, and calculates the remote SRv6 destination. 
+*   **The Fast Path (Flow Cache):** Once the Classifier computes the path, it writes a tiny, highly-optimized micro-rule directly into the DPDK engine's **Flow Cache**. 
+*   **Line-Rate Polling:** For the next 5 million packets in that exact same session, the VPP engine never looks at the massive routing table again. It simply hits the Flow Cache, applying the required Service Chain routing and SRv6 encapsulation on the fly. Because the DPDK engine is running in **Direct Memory Map** mode—where dedicated CPU cores are pinned in a continuous 100% loop polling a pre-allocated block of server RAM (Hugepages)—it processes these cached packets at raw physical hardware speed, completely bypassing Linux Kernel interruptions. 
+
+#### 5. The Separation of Cloud (WWW) and Intranet (vWAN)
 The VPP routing logic actively splits datapath traffic locally at the node:
 *   **Intranet Payload (`eth1` bound):** Corporate data is wrapped in SRv6/UDP and pushed out to the Azure vWAN fabric.
 *   **Local Web Breakout (`eth2` bound):** Standard internet browsing (e.g., Office365, YouTube) does not need to cross the expensive corporate vWAN. Instead, VPP applies NAT locally and pushes it straight to a localized Azure NAT Gateway for immediate public breakout, radically reducing vWAN transit costs. 
 
-#### 5. The Role of Azure CNI Powered by Cilium
+#### 6. The Role of Azure CNI Powered by Cilium
 While DPDK handles the ultra-fast datapaths, standard Kubernetes Management (pushing configuration, talking to the Infinity Portal, metrics) is handed off to **Azure CNI Powered by Cilium**. Cilium acts independently on the `eth0` interface, using lightweight eBPF rules to enforce strict network policies over the cluster's control plane telemetry without interfering with VPP's specialized transit.
