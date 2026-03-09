@@ -357,7 +357,57 @@ The DPDK workload container (your VPP Pod) must have the correct drivers compile
 2. Deploy a simple Ubuntu Pod annotated with `k8s.v1.cni.cncf.io/networks: sriov-network`.
 3. Exec into the Ubuntu Pod. Run `ip a`. If building this succeeded, you will see `eth0` (Cluster IP) AND `eth1` (Hardware SR-IOV MAC Address).
 
-### Phase 4: Setting up VPP & DPDK (The Data Plane Layer)
+## Phase 4: Deploying the Open-Source VPP Router (Data Plane Layer)
+
+Now that the hardware is exposed to Kubernetes via the Device Plugin, we can deploy a Pod that actually requests this physical Virtual Function (VF).
+
+**1. Creating the VPP Pod Manifest:**
+This Pod requests the SR-IOV network resource, which triggers Multus to inject the physical interface bypassing the Kubelet's standard CNI.
+
+```yaml
+# vpp-pod.yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: vpp-router
+  annotations:
+    k8s.v1.cni.cncf.io/networks: sriov-network
+spec:
+  containers:
+  - name: vpp
+    image: ubuntu:22.04
+    command: ["sleep", "infinity"]
+    securityContext:
+      privileged: true # Required for DPDK/kernel bypass operations
+    resources:
+      requests:
+        intel.com/sriov_net: '1' # Instructs K8s to assign exactly 1 physical VF
+      limits:
+        intel.com/sriov_net: '1'
+```
+
+**Key Explanations for the YAML:**
+* **`annotations: k8s.v1.cni.cncf.io/networks`**: Tells the Multus meta-CNI "Intercept this pod creation and map an additional interface using the configuration in the CRD `sriov-network`."
+* **`privileged: true`**: DPDK requires raw hardware access to `/dev/vfio` and memory mapping kernel spaces to operate polling drivers safely.
+* **`limits: intel.com/sriov_net: '1'`**: Since the device plugin advertised `1` available physical interface per node, claiming limit `1` reserves that hardware VF strictly to this single pod. K8s will literally deduct this from the node `allocatable` pool, just like CPU or memory!
+
+**2. Checking Pod Status:**
+```bash
+kubectl apply -f vpp-pod.yaml
+kubectl wait --for=condition=ready pod/vpp-router --timeout=90s
+kubectl get pods
+
+# OUTPUT:
+# NAME         READY   STATUS              RESTARTS   AGE
+# debug-pci    1/1     Running             0          179m
+# vpp-router   0/1     ContainerCreating   0          48s
+```
+
+*(Observation: During testing natively on Azure, passing the hardware as standard `host-device` CNI sometimes leads to namespace binding errors (`Link not found`) because the physical ConnectX-5 VF is heavily enslaved to Azure's `hv_netvsc` synthetic driver overlay. To properly map this into DPDK without losing control plane tracking, Azure generally recommends utilizing the explicit `sriov` CNI binary and overriding K8s CNI plugin manifests, or binding directly via the `vfio-pci` operator. This highlights the architectural friction where Kubernetes CNI standards collide with Azure's software-defined hypervisor!)*
+
+---
+
+### Phase 5: Setting up VPP & DPDK (Configuring the Router)
 1. Delete the Dummy Pod.
 2. Deploy the Open-Source VPP Pod. You will need to request `Hugepages` for memory in the Pod Spec (`resources.requests.memory`).
 3. Exec into the VPP Pod and use the VPP CLI (`vppctl`). Use it to bind the `eth1` interface to DPDK. 
