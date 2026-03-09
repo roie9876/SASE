@@ -249,12 +249,12 @@ flowchart TD
     classDef nva fill:#E3008C,stroke:#fff,stroke-width:2px,color:#fff
     classDef edge fill:#505050,stroke:#fff,stroke-width:2px,color:#fff
 
-    subgraph AWS_Cloud ["  AWS Cloud (🧠 Management & Intelligence)  "]
+    subgraph AWS_Cloud ["  AWS Management Cloud  "]
         Infinity["Check Point Infinity Portal<br/>(Unified Management & Logs)"]:::aws
         ThreatCloud["Check Point ThreatCloud AI<br/>(Global Threat Intelligence)"]:::aws
     end
 
-    subgraph ISV_SASE_Overlay ["  Check Point SASE Overlay Fabric (Azure Data Plane)  "]
+    subgraph ISV_SASE_Overlay ["  Check Point SASE Overlay  "]
         NVA1["Check Point SASE PoP 1<br/>(CloudGuard/Harmony, Azure East US)"]:::nva
         NVA2["Check Point SASE PoP 2<br/>(CloudGuard/Harmony, Azure West EU)"]:::nva
         
@@ -262,7 +262,7 @@ flowchart TD
         NVA1 <== "Check Point Global SD-WAN Tunnel<br/>(SRv6 over UDP + BGP)" ==> NVA2
     end
     
-    subgraph Azure_Transport ["  Azure Native Underlay (Customer's Dedicated VNET)  "]
+    subgraph Azure_Transport ["  Azure Native Underlay  "]
         VNet1["Azure VNet 1<br/>(East US Subnet)"]:::cloud -.-> Backbone["Azure Global Backbone<br/>(Only routes standard IP/UDP/TCP)"]:::cloud -.-> VNet2["Azure VNet 2<br/>(West EU Subnet)"]:::cloud
     end
     
