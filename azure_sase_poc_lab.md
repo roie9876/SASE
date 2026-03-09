@@ -18,6 +18,7 @@ graph TD
     classDef azure fill:#bbdefb,stroke:#333,stroke-width:2px,color:#000
     classDef aks fill:#c8e6c9,stroke:#333,stroke-width:2px,color:#000
     classDef pod fill:#ffcc80,stroke:#333,stroke-width:2px,color:#000
+    classDef app fill:#e1bee7,stroke:#333,stroke-width:2px,color:#000
 
     subgraph Simulated Branches
         B1[Branch 1 VM\nIP: 192.168.1.10]:::branch
@@ -41,8 +42,16 @@ graph TD
             MULTUS((Multus CNI Orchestrator))
             
             subgraph Open Source VPP Pod
-                VPP[FD.io VPP vRouter\nKernel Bypass DPDK]:::pod
+                VPP[FD.io VPP \nKernel Bypass DPDK]:::pod
+                VRF_A{VRF A}
+                VRF_B{VRF B}
+                
+                VPP --- VRF_A
+                VPP --- VRF_B
             end
+            
+            PODA[Customer A Dummy Pod \n IP: 10.0.0.5]:::app
+            PODB[Customer B Dummy Pod \n IP: 10.0.0.5 \n Overlapping Internal IP!]:::app
         end
     end
 
@@ -54,6 +63,9 @@ graph TD
     NIC1 ==>|eth1 - Both Branches Terminate Here| VPP
     MULTUS --> NODE_OS
     MULTUS --> NIC1
+    
+    VRF_A ==>|veth pair / tap| PODA
+    VRF_B ==>|veth pair / tap| PODB
 ```
 
 ---
@@ -93,6 +105,10 @@ Instead of using Check Point proprietary gateways, we explicitly map open-source
 *   **Component**: A single Kubernetes Pod running the official open-source VPP container image (`ligato/vpp-base` or similar). 
 *   **Configuration (NetworkAttachmentDefinition)**: A Custom Resource Definition (CRD) provided by Multus that tells Kubernetes: *"Take an SR-IOV Virtual Function from the underlying D4s_v5 card, turn it into `eth1`, and inject it into this VPP pod."*
 
+### 5. The Application Endpoints (Pod A & Pod B)
+*   **Component**: 2x basic NGINX or Ubuntu Pods.
+*   **Setup**: Attached behind the VPP pod via standard Linux `veth` (virtual ethernet) pairs or memory taps. Both pods will purposely be assigned the exact same IP (`10.0.0.5`) to prove that VPP completely isolates Customer A's traffic from Customer B's traffic.
+
 ---
 
 ## Lab Execution Phases
@@ -120,6 +136,12 @@ If you want to build this, here is the learning path to follow:
 1. Delete the Dummy Pod.
 2. Deploy the Open-Source VPP Pod. You will need to request `Hugepages` for memory in the Pod Spec (`resources.requests.memory`).
 3. Exec into the VPP Pod and use the VPP CLI (`vppctl`). Use it to bind the `eth1` interface to DPDK. 
-4. Configure two basic VRFs in VPP to separate the overlapping 192.168.1.0/24 subnets coming from your two branches!
+4. Configure two basic VRFs (VRF A and VRF B) in VPP. Map incoming traffic to these VRFs based on the source branch.
+
+### Phase 5: Validating End-to-End Overlap Isolation (Pod A & Pod B)
+1. Deploy `Pod A` and `Pod B` inside the AKS cluster. 
+2. Use Multus or standard Linux `ip link` commands to create a `veth` pair linking `Pod A` to VPP's VRF A, and `Pod B` to VPP's VRF B. 
+3. Assign the exact same IP address (e.g., `10.0.0.5`) to both Pod A and Pod B.
+4. **The Ultimate Test:** Ping `10.0.0.5` from the Customer A Branch VM. You will receive a reply from Pod A. Ping `10.0.0.5` from the Customer B Branch VM. You will receive a reply from Pod B. The identical IPs completely bypass one another!
 
 *⚠️ **Cost Warning:** Running Azure vWAN Hubs and DPDK-capable D-series nodes costs significant Azure credits. Destroy the infrastructure (`terraform destroy` or Azure Resource Group deletion) when you finish an educational session.*
