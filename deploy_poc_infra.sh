@@ -64,10 +64,12 @@ az network vhub connection create --resource-group $RG_NAME --hub-name $VHUB_NAM
 # ==============================================================================
 echo "4. Deploying AKS Cluster (Azure CNI Powered by Cilium)..."
 # Using Standard_D4s_v5 to ensure Accelerated Networking (SR-IOV) DPDK support.
+# We also attach the 'Managed Identity' to ensure Multus can modify routing.
 # ==============================================================================
 # Get Subnet ID for AKS
 AKS_SUBNET_ID=$(az network vnet subnet show -g $RG_NAME --vnet-name $AKS_VNET --name default --query id -o tsv)
 
+# Create the AKS cluster using Cilium for the eth0 control plane
 az aks create \
     --resource-group $RG_NAME \
     --name $AKS_CLUSTER_NAME \
@@ -79,5 +81,54 @@ az aks create \
     --vnet-subnet-id $AKS_SUBNET_ID \
     --generate-ssh-keys
 
-echo "Deployment Phase 1 Complete!"
-echo "Next step: Run 'az aks get-credentials --resource-group $RG_NAME --name $AKS_CLUSTER_NAME' to log into your new DPDK-capable cluster!"
+# Get AKS credentials
+az aks get-credentials --resource-group $RG_NAME --name $AKS_CLUSTER_NAME --overwrite-existing
+
+# ==============================================================================
+echo "5. Installing Multus & SR-IOV Device Plugin (The K8s Plumbing)..."
+# This is the secret sauce that enables eth1 and eth2 Kernel Bypass!
+# ==============================================================================
+
+# Install the official Multus DaemonSet
+echo "Applying Multus..."
+kubectl apply -f https://raw.githubusercontent.com/k8snetworkplumbingwg/multus-cni/master/deployments/multus-daemonset.yml
+
+# Wait for Multus to start (it needs to bind to the kubelet)
+sleep 15
+
+# Install the official SR-IOV Network Device Plugin 
+# This plugin scans the host for the hardware NIC (Intel/MANA) and makes it available to Kubernetes
+echo "Applying SR-IOV Device Plugin..."
+kubectl apply -f https://raw.githubusercontent.com/k8snetworkplumbingwg/sriov-network-device-plugin/master/deployments/sriovdp-daemonset.yaml
+
+# Create the NetworkAttachmentDefinition for eth1
+# This tells Multus to create an interface named "sriov-net1" and give it directly to our VPP pod bypassing the kernel.
+echo "Creating SR-IOV Network Attachment Definition..."
+cat <<EOF | kubectl apply -f -
+apiVersion: "k8s.cni.cncf.io/v1"
+kind: NetworkAttachmentDefinition
+metadata:
+  name: sriov-net1
+  annotations:
+    k8s.v1.cni.cncf.io/resourceName: intel.com/sriov
+spec:
+  config: '{
+    "type": "sriov",
+    "cniVersion": "0.3.1",
+    "name": "sriov-network",
+    "ipam": {
+      "type": "host-local",
+      "subnet": "10.56.217.0/24",
+      "routes": [{
+        "dst": "0.0.0.0/0"
+      }],
+      "gateway": "10.56.217.1"
+    }
+  }'
+EOF
+
+echo "=============================================================================="
+echo "Deployment Phase 1 & 2 Complete (Infrastructure & K8s Plumbing)!"
+echo "Your AKS cluster is now running Multus and SR-IOV alongside Cilium."
+echo "Hardware check: Run 'kubectl get nodes -o json | jq .items[].status.allocatable' to verify 'intel.com/sriov' capacity > 0."
+echo "=============================================================================="
