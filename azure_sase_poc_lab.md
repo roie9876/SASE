@@ -126,6 +126,83 @@ If you want to build this, here is the learning path to follow:
 2. Deploy the SR-IOV Device Plugin. This scans the underlying Azure Node's hardware bus for Accelerated Networking NICs.
 3. Verify physical hardware detection: `kubectl get nodes -o json | jq '.items[].status.allocatable'` -> You should see something like `intel.com/sriov: "1"`.
 
+---
+
+## Deployment Commands & Log (Phase 1 & Phase 2)
+
+The following commands were used to deploy the AKS environment, install the correct daemons (Multus & SR-IOV plugin), and verify successful installation.
+
+**1. Connecting to the DPDK-Capable AKS Cluster:**
+```bash
+az aks get-credentials --resource-group sase-poc-lab-rg --name sase-dpdk-aks --overwrite-existing
+```
+
+**2. Verifying Node Provisioning (`Standard_EC4as_v5` with Accelerated Networking):**
+```bash
+kubectl get nodes -o wide
+# OUTPUT:
+# NAME                                STATUS   ROLES    AGE     VERSION   INTERNAL-IP   EXTERNAL-IP   OS-IMAGE             KERNEL-VERSION      CONTAINER-RUNTIME  
+# aks-nodepool1-36348423-vmss000000   Ready    <none>   2m49s   v1.33.7   10.100.1.4    <none>        Ubuntu 20.04.6 LTS   5.15.0-1103-azure   containerd://1.7.30-2
+```
+
+**3. Installing the K8s Network Plumbing Configuration:**
+This installs both the Multus multiplexer and the SR-IOV hardware device plugin scanner:
+```bash
+kubectl apply -f https://raw.githubusercontent.com/k8snetworkplumbingwg/multus-cni/master/deployments/multus-daemonset.yml && \
+kubectl apply -f https://raw.githubusercontent.com/k8snetworkplumbingwg/sriov-network-device-plugin/master/deployments/sriovdp-daemonset.yaml
+
+# OUTPUT:
+# customresourcedefinition.apiextensions.k8s.io/network-attachment-definitions.k8s.cni.cncf.io created
+# clusterrole.rbac.authorization.k8s.io/multus created
+# clusterrolebinding.rbac.authorization.k8s.io/multus created
+# serviceaccount/multus created
+# configmap/multus-cni-config created
+# daemonset.apps/kube-multus-ds created
+# serviceaccount/sriov-device-plugin created
+# daemonset.apps/kube-sriov-device-plugin created
+```
+
+**4. Verifying Daemonsets (Multus & SR-IOV) are Running:**
+```bash
+kubectl get pods -A | grep -Ei 'multus|sriov'
+
+# OUTPUT:
+# kube-system   kube-multus-ds-8shtc                             1/1     Running            0          20s
+# kube-system   kube-sriov-device-plugin-8z7lj                   1/1     Running            0          18s
+```
+
+**5. Creating the Network Attachment CRD:**
+This is the instruction book Multus uses to know how to provision `eth1` inside the VPP pod:
+```bash
+cat <<EOF | kubectl apply -f -
+apiVersion: "k8s.cni.cncf.io/v1"
+kind: NetworkAttachmentDefinition
+metadata:
+  name: sriov-net1
+  annotations:
+    k8s.v1.cni.cncf.io/resourceName: intel.com/sriov
+spec:
+  config: '{
+    "type": "sriov",
+    "cniVersion": "0.3.1",
+    "name": "sriov-network",
+    "ipam": {
+      "type": "host-local",
+      "subnet": "10.56.217.0/24",
+      "routes": [{
+        "dst": "0.0.0.0/0"
+      }],
+      "gateway": "10.56.217.1"
+    }
+  }'
+EOF
+
+# OUTPUT:
+# networkattachmentdefinition.k8s.cni.cncf.io/sriov-net1 created
+```
+
+---
+
 ### Phase 3: The "Dummy" Multus Pod (Validation Layer)
 *Before learning DPDK/VPP, make sure Multus works.*
 1. Create a `NetworkAttachmentDefinition` mapping an SR-IOV interface.
