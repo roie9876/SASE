@@ -137,12 +137,12 @@ The following commands were used to deploy the AKS environment, install the corr
 az aks get-credentials --resource-group sase-poc-lab-rg --name sase-dpdk-aks --overwrite-existing
 ```
 
-**2. Verifying Node Provisioning (`Standard_EC4as_v5` with Accelerated Networking):**
+**2. Verifying Node Provisioning (`Standard_D4s_v5` with Accelerated Networking):**
 ```bash
 kubectl get nodes -o wide
 # OUTPUT:
-# NAME                                STATUS   ROLES    AGE     VERSION   INTERNAL-IP   EXTERNAL-IP   OS-IMAGE             KERNEL-VERSION      CONTAINER-RUNTIME  
-# aks-nodepool1-36348423-vmss000000   Ready    <none>   2m49s   v1.33.7   10.100.1.4    <none>        Ubuntu 20.04.6 LTS   5.15.0-1103-azure   containerd://1.7.30-2
+# NAME                                STATUS   ROLES    AGE     VERSION   INTERNAL-IP   EXTERNAL-IP   OS-IMAGE             KERNEL-VERSION      CONTAINER-RUNTIME
+# aks-nodepool1-36348423-vmss000000   Ready    <none>   2m49s   v1.33.7   10.100.1.4    <none>        Ubuntu 22.04.5 LTS   5.15.0-1102-azure   containerd://1.7.30-2
 ```
 
 **3. Installing the K8s Network Plumbing Configuration:**
@@ -171,34 +171,99 @@ kubectl get pods -A | grep -Ei 'multus|sriov'
 # kube-system   kube-sriov-device-plugin-8z7lj                   1/1     Running            0          18s
 ```
 
-**5. Creating the Network Attachment CRD:**
-This is the instruction book Multus uses to know how to provision `eth1` inside the VPP pod:
+**5. Hardware Discovery & SR-IOV Configuration:**
+After Multus and SR-IOV daemonsets are running, the cluster must be instructed on *which* hardware PCIe interfaces constitute valid SR-IOV Virtual Functions. 
+
+*Creating a Privileged Debug Pod to Scan the PCIe Bus:*
 ```bash
-cat <<EOF | kubectl apply -f -
+cat << 'EOF' > test-pci.yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: debug-pci
+spec:
+  hostNetwork: true
+  containers:
+  - name: debug
+    image: ubuntu
+    command: ["sleep", "infinity"]
+    securityContext:
+      privileged: true
+EOF
+kubectl apply -f test-pci.yaml
+kubectl wait --for=condition=ready pod/debug-pci
+kubectl exec debug-pci -- apt-get update -y && kubectl exec debug-pci -- apt-get install -y pciutils
+kubectl exec debug-pci -- lspci -nn | grep -i ether
+```
+
+*Output (Notice the Mellanox ConnectX-5 VF):*
+```
+b1fd:00:02.0 Ethernet controller [0200]: Mellanox Technologies MT28800 Family [ConnectX-5 Ex Virtual Function] [15b3:101a] (rev 80)
+```
+*(Vendor ID = `15b3`, Device ID = `101a`)*
+
+*Creating the SR-IOV ConfigMap:*
+```bash
+cat << 'EOF' > sriovdp-config.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sriovdp-config
+  namespace: kube-system
+data:
+  config.json: |
+    {
+      "resourceList": [{
+          "resourceName": "sriov_net",
+          "selectors": {
+              "vendors": ["15b3", "1414"],
+              "devices": ["101a", "1004", "101e", "00ba"]
+          }
+      }]
+    }
+EOF
+kubectl apply -f sriovdp-config.yaml
+# Restart the Device Plugin to load
+kubectl delete po -n kube-system -l app=sriov-network-device-plugin
+```
+
+*Verifying Node Exposure (`intel.com/sriov_net`):*
+```bash
+sleep 5 && kubectl get node -o json | jq '.items[0].status.allocatable'
+
+# OUTPUT:
+# {
+#   "cpu": "3860m",
+#   "ephemeral-storage": "119703055367",
+#   "hugepages-1Gi": "0",
+#   "hugepages-2Mi": "0",
+#   "intel.com/sriov_net": "1",
+#   "memory": "15601432Ki",
+#   "pods": "30"
+# }
+```
+
+**6. Creating the Network Attachment CRD:**
+This is the instruction book Multus uses to know how to provision `eth1` inside the VPP pod. We use `host-device` CNI to push the VF directly into the container bounding box:
+```bash
+cat << 'EOF' > mactvlan.yaml
 apiVersion: "k8s.cni.cncf.io/v1"
 kind: NetworkAttachmentDefinition
 metadata:
-  name: sriov-net1
+  name: sriov-network
   annotations:
-    k8s.v1.cni.cncf.io/resourceName: intel.com/sriov
+    k8s.v1.cni.cncf.io/resourceName: intel.com/sriov_net
 spec:
   config: '{
-    "type": "sriov",
-    "cniVersion": "0.3.1",
-    "name": "sriov-network",
-    "ipam": {
-      "type": "host-local",
-      "subnet": "10.56.217.0/24",
-      "routes": [{
-        "dst": "0.0.0.0/0"
-      }],
-      "gateway": "10.56.217.1"
-    }
-  }'
+  "type": "host-device",
+  "cniVersion": "0.3.1",
+  "name": "sriov-network"
+}'
 EOF
+kubectl apply -f mactvlan.yaml
 
 # OUTPUT:
-# networkattachmentdefinition.k8s.cni.cncf.io/sriov-net1 created
+# networkattachmentdefinition.k8s.cni.cncf.io/sriov-network created
 ```
 
 ---
