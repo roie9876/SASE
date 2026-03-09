@@ -74,6 +74,14 @@ When relying *solely* on native cloud provider firewalls or Gateways, customers 
 *   **Azure vWAN Native Limit:** Managed stateful Azure services (like NAT Gateways or Azure Firewalls) track session states. At extreme scale (millions of concurrent sessions or hundreds of thousands of CPS), SNAT port exhaustion or state table memory caps occur.
 *   **The Check Point Advantage:** vWAN treats the UDP overlay tunnels as a handful of massive *stateless* flows (using ECMP - Equal-Cost Multi-Path routing under the hood). The connection state tracking (CPS/Concurrent Flows) is entirely shifted to the Check Point CloudGuard engines. Properly sized Check Point instances can sustain **10+ Million concurrent connections** per cluster, completely mitigating Azure native state-table wipeouts.
 
+### E. MTU and Encapsulation Overhead (Jumbo Frames)
+Because Check Point's architecture deeply encapsulates traffic—wrapping a customer's raw IPv4 payload inside an IPv6 (SRv6) Header, and then wrapping *that* inside an outer IPv4 UDP header—the final packet size grows significantly (adding ~60-100 bytes of overhead). If standard 1500-byte MTUs were strictly enforced everywhere, packets would constantly fragment, destroying CPU and network performance.
+
+Here is how the architecture handles MTU limitations across the different network boundaries:
+*   **Customer Edge to Azure (The Internet Limit - 1500 MTU):** The public internet strictly enforces a 1500-byte MTU limit. To prevent fragmentation before traffic even reaches Azure, the Check Point Quantum SD-WAN routers deployed at the customer branch enforce **TCP MSS Clamping**. By artificially lowering the Max Segment Size of the TCP packets at the source branch (e.g., to ~1350 bytes), it guarantees there is plenty of "empty room" in the 1500-byte frame to attach the IPsec, UDP, and SRv6 headers without ever fragmenting over the internet.
+*   **Inside the Azure VNet (AKS Node MTU):** Once inside the Azure network, we bypass the 1500 limit. Azure's modern backend and Accelerated Networking (SR-IOV) NICs natively support **Jumbo Frames** (up to ~4000+ bytes). The DPDK/VPP ethernet interfaces inside the Check Point Pod are configured to accept these Jumbo MTUs.
+*   **Multi-Region Transit (Azure vWAN Backbone):** When SASE Hub `East US` needs to send the double-encapsulated packet to SASE Hub `West EU`, it routes over the Azure vWAN backbone. Because Microsoft's dark fiber internal network natively transports Jumbo Frames, these "Super Packets" fly across continents between the Hubs without ever fragmenting.
+
 ---
 
 ### Summary
