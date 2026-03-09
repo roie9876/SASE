@@ -5,6 +5,7 @@
 * **[Azure AKS Multi-NIC / CNI Architecture (Multus, Cilium, SR-IOV)](./azure_aks_cni_architecture.md)**
 * **[Azure AKS Node Hardware & NIC Tuning (DPDK, MANA, Limits)](./azure_aks_nic_performance.md)**
 * **[Azure vWAN Global Scale & Limits Breakdown (MTU, Connections, BGP)](./azure_vwan_scale.md)**
+* **[Educational Azure POC Lab (Building Open-Source SASE with VPP/vWAN/Multus)](./azure_sase_poc_lab.md)**
 
 ---
 
