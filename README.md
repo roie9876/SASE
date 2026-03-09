@@ -1,5 +1,12 @@
 # Cloud-Native SASE / SD-WAN ISV Architecture
 
+### 📚 Companion Deep-Dive Guides
+* **[Check Point AKS Cloud-Native SASE Architecture (VPP, SRv6, SR-IOV)](./checkpoint_aks_sase.md)**
+* **[Azure vWAN Global Scale & Limits Breakdown (MTU, Connections, BGP)](./azure_vwan_scale.md)**
+* **[Check Point Customer Enablement & Q&A Notes](./notes/aks_sase_architecture.md)**
+
+---
+
 ### Master Table of Contents
 1. [Education: Understanding SASE](#education-understanding-sase)
 2. [Check Point SASE (Harmony) Architecture](#check-point-sase-harmony-architecture)
