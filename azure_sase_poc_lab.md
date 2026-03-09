@@ -264,6 +264,26 @@ kubectl get nodes -o json | jq '.items[].status.allocatable'
 }
 ```
 
+### 3. Verification of DPDK Support Constraints
+It's important to understand that **DPDK is not a flip-switch in Azure.** It is strictly a software library. To "support DPDK", the cluster must meet three fundamental requirements. Here is how you verify them:
+
+**A. PCIe Hardware Access (SR-IOV):**
+DPDK requires direct access to the physical NIC queue. If Accelerated Networking is marked `true` (checked above), Azure guarantees this requirement is met.
+
+**B. Memory Allocation (Linux Hugepages):**
+DPDK requires contiguous locks of memory (2MB or 1GB pages) to store network packets and avoid CPU cache misses. By default, AKS node pools do not allocate hugepages unless you specify a custom `--kubelet-config` during pool creation. 
+*   **How to Verify:** Look for `hugepages-2Mi` in the node allocatable output.
+    ```bash
+    kubectl get nodes -o json | jq '.items[].status.allocatable | with_entries(select(.key | contains("hugepages")))'
+    # Good Output:
+    # {
+    #   "hugepages-2Mi": "2048Mi"
+    # }
+    ```
+
+**C. Compatible Poll Mode Drivers (PMD):**
+The DPDK workload container (your VPP Pod) must have the correct drivers compiled internally. Azure predominantly uses Mellanox (ConnectX-3, ConnectX-4 Lx, ConnectX-5) and newer Microsoft MANA NICs. If the container lacks the `mlx5` or `mana` DPDK drivers, DPDK will fail to initialize the `eth1` interface, even if SR-IOV is attached perfectly.
+
 ---
 
 ### Phase 3: The "Dummy" Multus Pod (Validation Layer)
