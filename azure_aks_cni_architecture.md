@@ -96,6 +96,17 @@ While the Master VPP DaemonSet handles the external high-speed transport (SR-IOV
 
 ---
 
+## 5. Ingress: The 1:1 Public IP Mapping (Bypassing K8s LoadBalancers)
+A critical requirement for terminating millions of customer IPsec / SD-WAN tunnels is having a reachable Public IP. 
+In standard Kubernetes, exposing a workload means creating a `Service` of `type: LoadBalancer`. This asks Azure to create an Azure Load Balancer, which routes traffic to the Node's `eth0`, hitting the Linux Kernel's `kube-proxy` or `Cilium` tables. **This would instantly destroy the DPDK kernel bypass.**
+
+To solve this, the architecture physically maps the IP directly to the hardware:
+1.  **The Azure Resource:** An **Azure Public IP Address** is assigned *directly* to the physical Virtual Machine Network Interface (the specific NIC that will become `eth2` via SR-IOV).
+2.  **The 1:1 NAT:** The Azure SDN fabric performs a 1:1 wire-speed NAT from the Public IP directly to the hardware NIC's private physical IP.
+3.  **Direct Ingestion:** When the branch SD-WAN appliance connects, the IPSec packet (UDP 500/4500) flies through the Azure Switch directly onto the hardware NIC, and directly into the Master VPP DaemonSet's RAM. Kubernetes ingress, `kube-proxy`, and the LoadBalancer never see the connection.
+
+---
+
 ## Summary Topology of the Interfaces
 
 | K8s Interface | Bound Hardware | Responsible CNI | Traffic Purpose | Kernel State |
