@@ -203,6 +203,69 @@ EOF
 
 ---
 
+## 🛑 Validation: Verifying Accelerated Networking & SR-IOV Status
+In Azure, **Accelerated Networking IS SR-IOV**. When you enable Accelerated Networking on an Azure VM, Azure's Hypervisor uses Single Root I/O Virtualization (SR-IOV) to bypass the virtual switch and hand a physical Virtual Function (VF) directly to the VM. 
+
+If your VM SKU does not support this (like the `Standard_EC4as_v5`), Kubernetes will not be able to bind the hardware to the VPP pod. You must verify this at both the Azure level and the Kubernetes level.
+
+### 1. Verification at the Azure Infrastructure Level
+You can query the AKS VM Scale Set (VMSS) to see if Azure actually granted the Accelerated Networking hardware capability.
+
+**Command:**
+```bash
+# 1. Get the hidden Node Resource Group
+NODE_RG=$(az aks show -g sase-poc-lab-rg -n sase-dpdk-aks --query nodeResourceGroup -o tsv)
+
+# 2. Get the VMSS Name
+VMSS_NAME=$(az vmss list -g $NODE_RG --query "[0].name" -o tsv)
+
+# 3. Query the Network Profile for Accelerated Networking state
+az vmss show -g $NODE_RG -n $VMSS_NAME --query "virtualMachineProfile.networkProfile.networkInterfaceConfigurations[].enableAcceleratedNetworking" -o yaml
+```
+
+**Bad Output (Hardware Bypass will fail):**
+```yaml
+- false
+```
+
+**Expected Output (Hardware Bypass will succeed):**
+```yaml
+- true
+```
+
+### 2. Verification at the Kubernetes Level (SR-IOV Capacity)
+If Accelerated Networking is `true`, the `sriov-network-device-plugin` Pod will discover the physical hardware on the PCIe bus and advertise it to the Kubelet. You verify this by checking the node's `allocatable` resources.
+
+**Command:**
+```bash
+kubectl get nodes -o json | jq '.items[].status.allocatable'
+```
+
+**Bad Output (Missing SR-IOV resource. The device plugin found no PCIe Virtual Functions):**
+```json
+{
+  "cpu": "3860m",
+  "ephemeral-storage": "118810327253",
+  "hugepages-1Gi": "0",
+  "hugepages-2Mi": "0",
+  "memory": "31094420Ki",
+  "pods": "30"
+}
+```
+
+**Expected Output (The Node advertises physical NICs to Kubernetes):**
+```json
+{
+  "cpu": "3860m",
+  "ephemeral-storage": "118810327253",
+  "intel.com/sriov": "1",          <-- Success! (or mellanox.com/sriov)
+  "memory": "31094420Ki",
+  "pods": "30"
+}
+```
+
+---
+
 ### Phase 3: The "Dummy" Multus Pod (Validation Layer)
 *Before learning DPDK/VPP, make sure Multus works.*
 1. Create a `NetworkAttachmentDefinition` mapping an SR-IOV interface.
