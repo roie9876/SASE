@@ -248,24 +248,24 @@ flowchart TD
     classDef nva fill:#E3008C,stroke:#fff,stroke-width:2px,color:#fff
     classDef edge fill:#505050,stroke:#fff,stroke-width:2px,color:#fff
 
-    subgraph ISV_SASE_Overlay [" Customer-Dedicated SASE Overlay Fabric (BGP & SRv6 aware) "]
+    subgraph ISV_SASE_Overlay ["  Check Point SASE Overlay Fabric (Infinity Architecture)  "]
         direction LR
-        NVA1["Check Point CloudGuard Hub 1<br/>(Azure East US)"]:::nva
-        NVA2["Check Point CloudGuard Hub 2<br/>(Azure West EU)"]:::nva
+        NVA1["Check Point SASE PoP 1<br/>(CloudGuard/Harmony, Azure East US)"]:::nva
+        NVA2["Check Point SASE PoP 2<br/>(CloudGuard/Harmony, Azure West EU)"]:::nva
         
         %% Core overlay connectivity
-        NVA1 <== "Internal Overlay Tunnel<br/>(SRv6 over UDP + BGP)" ==> NVA2
+        NVA1 <== "Check Point Global SD-WAN Tunnel<br/>(SRv6 over UDP + BGP)" ==> NVA2
     end
     
-    subgraph Azure_Transport [" Azure Native Underlay (Customer's Dedicated VNET) "]
+    subgraph Azure_Transport ["  Azure Native Underlay (Customer's Dedicated VNET)  "]
         direction LR
         VNet1["Azure VNet 1<br/>(East US Subnet)"]:::cloud -.-> Backbone["Azure Global Backbone<br/>(Only routes standard IP/UDP/TCP)"]:::cloud -.-> VNet2["Azure VNet 2<br/>(West EU Subnet)"]:::cloud
     end
     
-    subgraph Customer_Edges [" Customer Edge Locations "]
-        Branch["Branch Office<br/>(Quantum SD-WAN CPE)"]:::edge
-        HQ["On-Prem Data Center<br/>(Core Router)"]:::edge
-        User["Remote User<br/>(Harmony ZTNA Agent)"]:::edge
+    subgraph Customer_Edges ["  Customer Edge Locations  "]
+        Branch["Branch Office<br/>(Check Point Quantum SD-WAN)"]:::edge
+        HQ["On-Prem Data Center<br/>(Quantum Gateway)"]:::edge
+        User["Remote User<br/>(Check Point Harmony Connect ZTNA)"]:::edge
     end
     
     %% Edge connections to NVAs
