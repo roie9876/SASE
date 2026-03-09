@@ -88,6 +88,78 @@ The Customer Data Plane completely bypasses the Azure CNI and the host worker no
 
 ---
 
+## Deep Dive: How 1 physical Azure NIC becomes 3 Pod NICs (SR-IOV Slicing)
+
+One of the most confusing elements of Kubernetes High-Performance Networking is how an Azure AKS Worker Node, which only has **one** Primary Network Interface configured in the Azure portal, can magically provide `eth0`, `eth1`, and `eth2` to a Pod. 
+
+The secret lies in the fact that **Accelerated Networking** in Azure is actually a hardware technology called **Single Root I/O Virtualization (SR-IOV)**.
+
+### The "Hardware Slicer" Architecture
+
+```mermaid
+graph TD
+    classDef hardware fill:#e1bee7,stroke:#333,stroke-width:2px,color:#000
+    classDef virtual fill:#b3e5fc,stroke:#333,stroke-width:2px,color:#000
+    classDef k8s fill:#c8e6c9,stroke:#333,stroke-width:2px,color:#000
+    classDef pod fill:#ffcc80,stroke:#333,stroke-width:2px,color:#000
+
+    subgraph Azure Datacenter Rack
+        SmartNIC["Physical SmartNIC (Mellanox/MANA)<br>100+ Gbps"]:::hardware
+        PF["Physical Function (PF)"]:::hardware
+        VF1["Virtual Function 1 (VF)"]:::hardware
+        VF2["Virtual Function 2 (VF)"]:::hardware
+        
+        SmartNIC --- PF
+        SmartNIC --- VF1
+        SmartNIC --- VF2
+    end
+
+    subgraph AKS Worker Node OS (Standard_D4s_v5)
+        vSwitch["Azure Virtual Switch (Hyper-V)"]:::virtual
+        OS_NIC["Primary Azure VM NIC (VM level)"]:::virtual
+        PCIe_1["PCIe Device mapped to /dev/vfio/1"]:::hardware
+        PCIe_2["PCIe Device mapped to /dev/vfio/2"]:::hardware
+    end
+
+    subgraph Kubernetes Networking Ecosystem
+        Cilium["Azure CNI / Cilium<br>(Standard Networking)"]:::k8s
+        Multus["Multus CNI + SR-IOV Plugin<br>(Hardware Plumber)"]:::k8s
+    end
+
+    subgraph Check Point VPP Pod
+        eth0["eth0<br>Mgmt & K8s API"]:::pod
+        eth1["eth1<br>Internal/LAN DPDK"]:::pod
+        eth2["eth2<br>External/WAN DPDK"]:::pod
+    end
+
+    %% The Slow Path (eth0)
+    PF -->|Standard Traffic| vSwitch
+    vSwitch --> OS_NIC
+    OS_NIC --> Cilium
+    Cilium --> eth0
+
+    %% The Fast Path (eth1 & eth2)
+    VF1 ==>|PCIe Passthrough (Bypasses vSwitch)| PCIe_1
+    VF2 ==>|PCIe Passthrough (Bypasses vSwitch)| PCIe_2
+
+    PCIe_1 ==>|Discovered by| Multus
+    PCIe_2 ==>|Discovered by| Multus
+
+    Multus ==>|Direct PCIe Injection via CRD| eth1
+    Multus ==>|Direct PCIe Injection via CRD| eth2
+```
+
+### The Slicing Process Explained:
+1.  **The Physical Card (PF):** Your AKS VM sits on a server with a massive 100 Gbps network card. This card is represented as a **Physical Function (PF)**.
+2.  **The Slices (VFs):** Because the card supports SR-IOV, the motherboard can slice that single physical PF into dozens of distinct **Virtual Functions (VFs)** at the PCIe hardware level. Each VF has its own independent MAC address and memory queues, but all VFs share the massive bandwidth pipeline of the parent SmartNIC.
+3.  **The Standard Path (`eth0`):** The primary VM NIC gets its K8s IP address from standard Azure routing traversing the hypervisor vSwitch. Azure CNI/Cilium hands this to your Pod as `eth0`.
+4.  **The Hardware Path (`eth1` & `eth2`):** The K8s `sriov-network-device-plugin` scans the Node's PCIe bus and discovers all the available hardware slices (VFs) that Azure mapped to your VM. 
+5.  **Multus Assembly:** When the Pod starts, Multus intercepts it. It looks at our `NetworkAttachmentDefinition`, grabs one physical slice for `eth1` (Internal Data) and another slice for `eth2` (External Data), and literally passes the PCI hardware directly through the Pod's namespace walls.
+
+Because of this slicing, you **do not** configure multiple NIC subnets in the `az aks create` command. You simply ask Azure for a VM size that supports Accelerated Networking, and let Multus + SR-IOV "carve out" the required interfaces internally.
+
+---
+
 ## 4. Internal Service Chaining (Pod-to-Pod)
 While the Master VPP DaemonSet handles the external high-speed transport (SR-IOV), it must route packets through the internal Check Point Microservices (IPsec, QoS, Firewall, CASB).
 
