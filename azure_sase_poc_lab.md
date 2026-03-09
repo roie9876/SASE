@@ -58,6 +58,15 @@ graph TD
 
 ---
 
+## ⚠️ Architecture Note: POC vs. Production Check Point SASE
+You might notice a difference between the full Check Point SASE diagram and this POC diagram regarding how the branches connect:
+*   **Production Check Point SASE (The Overlay):** In reality, the Quantum SD-WAN branch devices establish an encrypted **IPsec / ZTNA Tunnel** *directly* to the public IP of the Check Point VPP Pod inside the AKS cluster. 
+*   **This Educational POC (The Underlay):** To make learning easier without needing to configure complex IPsec/IKEv2 daemons on the open-source VPP router, this lab relies on Azure's native routing (VNet Peering to an Azure vWAN Hub) to deliver the raw traffic. 
+
+Both methods eventually result in the packet physically arriving at the Azure MANA NIC and being ingested by DPDK into the container. This lab simplifies the cryptography layer so you can focus strictly on learning the Kubernetes Multus & SR-IOV Data Plane mechanics.
+
+---
+
 ## Bill of Materials (The Components)
 
 Instead of using Check Point proprietary gateways, we explicitly map open-source and Azure-native components to achieve the exact same architecture:
