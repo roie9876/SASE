@@ -20,7 +20,34 @@ However, **DPDK operates in "Polling Mode."** It intentionally pins a CPU core a
 
 ---
 
-## 2. Maximizing the Physical NIC: Accelerated Networking & MANA
+## 2. The 1 NIC Bandwidth Myth (Scaling SR-IOV Performance)
+
+A very common misconception when moving from heavily-cabled physical datacenters to Azure SDN is assuming that bandwidth is tied to the physical number of Virtual Machine NICs you provision. *("If my VPP Pod needs 25 Gbps, I must attach multiple 10 Gbps Ethernet interfaces to the K8s Worker Node.")*
+
+**This is definitively false in Azure Cloud.**
+
+In Azure, **Network Bandwidth is metered and enforced globally at the VM Size/SKU level**, completely regardless of how many individual Network Interfaces (vNICs or Virtual Functions) are mapped to it. 
+
+### Why 1 NIC is all you need for 40+ Gbps:
+1.  **The Physical Hardware Pipeline is Massive:** The actual physical SmartNIC (Mellanox ConnectX or Microsoft MANA) sitting in the Azure server rack that hosts your VM is a huge **100 Gbps or 200 Gbps** physical card. 
+2.  **SR-IOV Slicing Shares the Pipeline:** As documented in the CNI architecture, SR-IOV slices that single 100G card into Virtual Functions (`eth1`, `eth2`) for the Pod. All slices share the parent card's massive bandwidth pool.
+3.  **The Azure SDN Quality of Service (QoS) Throttle:** The hypervisor looks directly at the VM SKU you paid for and applies a hard QoS software limit across *all* SR-IOV slices cumulatively. 
+
+### SASE Production Scaling Table:
+When you need to handle more customer IPsec tunnels or process more raw Gbps throughput, **you do not add more NICs to the AKS worker node**. Instead, you vertically or horizontally scale the VM CPU tier. Upgrading the CPU count automatically unlocks higher bandwidth allowances from the underlying 100Gbps SmartNIC:
+
+| Azure VM Size (Example) | vCPU Core Count | SR-IOV Supported? | Maximum Permitted Bandwidth (QoS Limit) | Role |
+| :--- | :--- | :--- | :--- | :--- |
+| `Standard_D4s_v5` | 4 vCPUs | ✅ Yes | **12.5 Gbps / ~1,000,000 PPS** | Educational POC / Lab |
+| `Standard_D16s_v5` | 16 vCPUs | ✅ Yes | **25.0 Gbps / ~2,000,000 PPS** | Small Regional Hub |
+| `Standard_F32s_v2` | 32 vCPUs | ✅ Yes | **32.0 Gbps / ~4,000,000 PPS** | Production Check Point SASE Hub |
+| `Standard_F72s_v2` | 72 vCPUs | ✅ Yes | **40.0 Gbps+ / ~8,000,000 PPS** | Dense Enterprise Gateway Hub |
+
+*Therefore, the SR-IOV Multus design remains identical whether you are pushing 100 Mbps or 40 Gbps. The only variable that changes is the underlying AKS Node SKU limit.*
+
+---
+
+## 3. Maximizing the Physical NIC: Accelerated Networking & MANA
 
 In Azure, to get the absolute maximum performance from a NIC, you must bypass the virtualized Hyper-V switch using **Accelerated Networking**.
 
