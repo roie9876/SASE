@@ -237,18 +237,25 @@ flowchart TB
 
 To understand how an ISV builds a custom SASE fabric in Azure (deployed dedicated-per-customer) without using managed Network services (like Virtual WAN), we must visualize the separation between the **Azure Underlay** and the **ISV Overlay**. High-performance NVAs (like Check Point CloudGuard Gateway) hosted in VMs act as the core routing fabric.
 
-### Cloud Hub & Spoke Connectivity Model
+### Cloud Hub & Spoke Connectivity Model (Multi-Cloud SASE)
 
-This diagram illustrates how on-premise locations, branch offices, and remote users connect to the customer's dedicated SASE cloud fabric. Notice that Azure acts purely as the physical transport layer.
+This diagram illustrates a real-world multi-cloud deployment of Check Point's SASE solution. The **🧠 Management & Intelligence plane** (Infinity Portal and ThreatCloud AI) acts as the overarching global control plane hosted in the **AWS Cloud**, while the heavy lifting of the **Data Plane** (SSE elements, CloudGuard, Harmony, and Quantum SD-WAN transit) is implemented entirely within the customer's dedicated **Azure Cloud** infrastructure.
 
 ```mermaid
 flowchart TD
     %% Styling
     classDef cloud fill:#0078D4,stroke:#fff,stroke-width:2px,color:#fff
+    classDef aws fill:#FF9900,stroke:#fff,stroke-width:2px,color:#fff
     classDef nva fill:#E3008C,stroke:#fff,stroke-width:2px,color:#fff
     classDef edge fill:#505050,stroke:#fff,stroke-width:2px,color:#fff
 
-    subgraph ISV_SASE_Overlay ["  Check Point SASE Overlay Fabric (Infinity Architecture)  "]
+    subgraph AWS_Cloud ["  AWS Cloud (🧠 Management & Intelligence)  "]
+        direction LR
+        Infinity["Check Point Infinity Portal<br/>(Unified Management & Logs)"]:::aws
+        ThreatCloud["Check Point ThreatCloud AI<br/>(Global Threat Intelligence)"]:::aws
+    end
+
+    subgraph ISV_SASE_Overlay ["  Check Point SASE Overlay Fabric (Azure Data Plane)  "]
         direction LR
         NVA1["Check Point SASE PoP 1<br/>(CloudGuard/Harmony, Azure East US)"]:::nva
         NVA2["Check Point SASE PoP 2<br/>(CloudGuard/Harmony, Azure West EU)"]:::nva
@@ -267,6 +274,13 @@ flowchart TD
         HQ["On-Prem Data Center<br/>(Quantum Gateway)"]:::edge
         User["Remote User<br/>(Check Point Harmony Connect ZTNA)"]:::edge
     end
+    
+    %% API and Management connections
+    NVA1 -. "Control Plane APIs & Logs" .-> Infinity
+    NVA2 -. "Control Plane APIs & Logs" .-> Infinity
+    
+    NVA1 -. "Real-time Threat Updates" .-> ThreatCloud
+    NVA2 -. "Real-time Threat Updates" .-> ThreatCloud
     
     %% Edge connections to NVAs
     Branch <== "IPsec Tunnel" ===> NVA1
