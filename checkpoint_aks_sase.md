@@ -2,7 +2,7 @@
 
 As SASE providers scale, migrating from traditional virtual machines to Cloud-Native Network Functions (CNFs) hosted on Azure Kubernetes Service (AKS) becomes critical. 
 
-This document explores how Check Point implements a high-speed, multi-tenant SASE fabric using dual-NIC Pods integrated with Azure's physical backbone and Virtual WAN (vWAN) using Multus, DPDK, and SR-IOV.
+This document explores how Check Point implements a high-speed, multi-tenant SASE fabric using Multi-NIC Pods integrated with Azure's physical backbone and Virtual WAN (vWAN) using Multus, DPDK, and SR-IOV.
 
 ---
 
@@ -67,7 +67,7 @@ flowchart TD
 
 ## 2. Zoom-in: AKS Cluster Node & NIC Architecture (Single Region)
 
-Zooming into **Region A**, this diagram explains the complex host-level networking required to perform Telco-grade packet processing inside an AKS Worker Node. It outlines the separation of the Control Plane (Cilium) and Data Plane (Multus, DPDK, SR-IOV).
+Zooming into **Region A**, this diagram explains the complex host-level networking required to perform Telco-grade packet processing inside an AKS Worker Node. It outlines the separation of the Control Plane (Cilium) and the Multi-NIC Data Plane (Multus, DPDK, SR-IOV), actively separating Intranet traffic from WWW Internet traffic to save bandwidth and costs.
 
 ```mermaid
 flowchart TD
@@ -77,45 +77,54 @@ flowchart TD
     classDef custB fill:#E64A19,stroke:#fff,stroke-width:2px,color:#fff
     classDef hw fill:#424242,stroke:#fff,stroke-width:2px,color:#fff
     classDef mgmt fill:#00ACC1,stroke:#fff,stroke-width:2px,color:#fff
+    classDef net fill:#005A9E,stroke:#fff,stroke-width:2px,color:#fff
 
     subgraph RegionA [" 📍 AKS Cluster Node (Single Region Deep-Dive) "]
         
-        subgraph Node [" Azure Worker Node "]
+        subgraph Node [" Azure Worker Node (Multi-NIC) "]
             direction TB
-            SRIOV_A["Azure Physical NIC<br/>(SR-IOV Accelerated Networking)"]:::hw
             
             PodA_CustA["Customer A SASE Pod<br/>(VPP / DPDK Data Plane)"]:::custA
             PodA_CustB["Customer B SASE Pod<br/>(VPP / DPDK Data Plane)"]:::custB
             
-            MgmtA["eth0 CNI: Azure CNI Powered by Cilium<br/>(eBPF Security)"]:::mgmt
+            MgmtA["eth0: Azure CNI Powered by Cilium<br/>(eBPF Security)"]:::mgmt
+            SRIOV_WAN["Azure Physical NIC 1<br/>(SR-IOV Accelerated)"]:::hw
+            SRIOV_WWW["Azure Physical NIC 2<br/>(SR-IOV Accelerated)"]:::hw
             
             %% Management connections inside Node
-            PodA_CustA -. "eth0 (Control Data only)" .- MgmtA
-            PodA_CustB -. "eth0 (Control Data only)" .- MgmtA
+            PodA_CustA -. "eth0 (Control Plane)" .- MgmtA
+            PodA_CustB -. "eth0 (Control Plane)" .- MgmtA
             
-            %% Data plane connections
-            PodA_CustA ==>|"eth1 (Multus / DPDK Bypass)"| SRIOV_A
-            PodA_CustB ==>|"eth1 (Multus / DPDK Bypass)"| SRIOV_A
+            %% Data plane Intranet connections
+            PodA_CustA ==>|"eth1 (Multus/DPDK)"| SRIOV_WAN
+            PodA_CustB ==>|"eth1 (Multus/DPDK)"| SRIOV_WAN
+            
+            %% Data plane WWW connections
+            PodA_CustA ==>|"eth2 (Multus/DPDK)"| SRIOV_WWW
+            PodA_CustB ==>|"eth2 (Multus/DPDK)"| SRIOV_WWW
         end
     end
 
     %% External I/O
     Infinity(("To: AWS Infinity Portal")):::mgmt
-    vWAN(("To: Azure vWAN / Internet")):::azure
+    vWAN(("To: Azure vWAN<br/>(Intranet Traffic)")):::azure
+    NAT(("To: Azure NAT Gateway<br/>(Public WWW Traffic)")):::net
     
-    MgmtA -. "API/Telemetry routing" .-> Infinity
-    SRIOV_A ==>|"Million-PPS Raw Packet Routing"| vWAN
+    MgmtA -. "Telemetry/API Routing" .-> Infinity
+    SRIOV_WAN ==>|"Encapsulated SRv6"| vWAN
+    SRIOV_WWW ==>|"Raw Cleartext NAT"| NAT
 ```
 
 ### Architectural Deep Dive
 
-#### 1. Dual-NIC Pods (Management vs. Data Plane)
-To satisfy Telco-grade throughput, the SASE Pods require two distinct interfaces utilizing **Multus CNI**:
+#### 1. Multi-NIC Pods (Management, Intranet, and WWW)
+To satisfy Telco-grade throughput and separate security domains, the SASE Pods require three distinct interfaces utilizing **Multus CNI**:
 *   **`eth0` (Management):** Connected via standard **Azure CNI Powered by Cilium**. This provides highly secure, eBPF-based Kubernetes network policies for Control Plane telemetry. It reports back to the Infinity Portal in AWS.
-*   **`eth1` (Data Plane):** Dedicated entirely to raw Check Point customer payload. It bypasses Cilium and the Linux OS kernel completely.
+*   **`eth1` (Intranet Data Plane):** Dedicated entirely to raw Check Point customer payload destined for the internal SD-WAN. Traffic is encapsulated in UDP/SRv6 and pushed to Azure vWAN.
+*   **`eth2` (WWW Data Plane):** Dedicated entirely to Public Internet browsing (SaaS, Video, Web). Traffic is natively NATted by VPP and pushed directly to an Azure NAT Gateway. **This bypasses vWAN entirely, saving massive bandwidth costs.**
 
 #### 2. High-Speed Packet Processing (KERNEL BYPASS)
-To achieve million-packet-per-second (PPS) routing within the container, the Pod's `eth1` utilizes the **Data Plane Development Kit (DPDK)**. Azure directly supports this by attaching **Accelerated Networking (SR-IOV)** Virtual Functions straight into the Pods. The host Azure OS completely ignores this traffic, handing the physical network card instructions directly to the Check Point VPP engine.
+To achieve million-packet-per-second (PPS) routing within the container, the Pod's `eth1` and `eth2` interfaces utilize the **Data Plane Development Kit (DPDK)**. Azure directly supports this by attaching multiple **Accelerated Networking (SR-IOV)** Virtual Functions straight into the Pods. The host Azure OS completely ignores this traffic, handing the physical network card instructions directly to the Check Point VPP engine, which splits the WAN and WWW routing logic instantly.
 
 #### 3. Overcoming Azure vWAN & IPv6 Overlap Limitations
 Azure vWAN is an incredibly powerful global transit layer, but it is deeply intolerant of overlapping BGP IPv4 spaces. In our diagram, Customer A and Customer B both use `10.0.0.0/8`. 

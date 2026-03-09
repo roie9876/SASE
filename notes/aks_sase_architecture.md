@@ -1,1 +1,0 @@
-# AKS SASE Architecture Notes

@@ -3,7 +3,6 @@
 ### 📚 Companion Deep-Dive Guides
 * **[Check Point AKS Cloud-Native SASE Architecture (VPP, SRv6, SR-IOV)](./checkpoint_aks_sase.md)**
 * **[Azure vWAN Global Scale & Limits Breakdown (MTU, Connections, BGP)](./azure_vwan_scale.md)**
-* **[Check Point Customer Enablement & Q&A Notes](./notes/aks_sase_architecture.md)**
 
 ---
 
@@ -913,7 +912,7 @@ When a customer wants to dynamically add a "CASB Engine" to their security chain
 
 As SASE providers scale, migrating from traditional virtual machines to **Cloud-Native Network Functions (CNFs)** hosted on Azure Kubernetes Service (AKS) becomes critical. 
 
-This requires highly advanced container networking capabilities, including **Dual-NIC Pods**, **Multus CNI**, **Azure CNI Powered by Cilium (eBPF)**, and **SR-IOV kernel bypass** to achieve Telco-grade throughput over Azure's Virtual WAN (vWAN).
+This requires highly advanced container networking capabilities, including **Multi-NIC Pods**, **Multus CNI**, **Azure CNI Powered by Cilium (eBPF)**, and **SR-IOV kernel bypass** to achieve Telco-grade throughput over Azure's Virtual WAN (vWAN).
 
 👉 **[Read the Full Check Point AKS Architecture & Diagrams Here](./checkpoint_aks_sase.md)**
 

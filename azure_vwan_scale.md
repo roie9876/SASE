@@ -60,7 +60,7 @@ When relying *solely* on native cloud provider firewalls or Gateways, customers 
 
 ### A. Raw Throughput (Bandwidth)
 *   **Azure vWAN Native Limit:** A single Azure Virtual Hub scales its routing infrastructure up to a maximum of **50 Gbps**. 
-*   **The Check Point Advantage:** By keeping traffic entirely off Azure's managed Network Virtual Appliances (like Azure Firewall, which introduces latency), we saturate the maximum 50 Gbps pipe using raw UDP transit. If an enterprise needs 100 Gbps, we can deploy an additional parallel Virtual Hub within the same region to scale horizontally.
+*   **The Check Point Advantage (Multi-NIC Offloading):** First, we bypass Azure Firewall latency by passing raw UDP across vWAN. Second, we can inject a third NIC (`eth2` via Multus) strictly for public WWW internet traffic. Heavy web traffic (Netflix, SaaS, YouTube) is NATted directly to the internet locally within the region, bypassing vWAN completely. This ensures the precious 50 Gbps vWAN pipe is exclusively reserved for secure, inter-region enterprise data.
 
 ### B. Route Scale (BGP Limitations)
 *   **Azure vWAN Native Limit:** Azure vWAN Hubs support up to a maximum of **10,000 routes**. Standard Azure VPN Gateways often cap out at 1,000–4,000 routes. For a large enterprise or telco with millions of subnets and overlapping IP spaces, this limit is a catastrophic bottleneck.
