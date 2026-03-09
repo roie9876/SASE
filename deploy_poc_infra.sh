@@ -57,9 +57,9 @@ az network vwan create --resource-group $RG_NAME --name $VWAN_NAME --location $L
 az network vhub create --resource-group $RG_NAME --name $VHUB_NAME --vwan $VWAN_NAME --address-prefix 10.200.0.0/24 --location $LOCATION
 
 # Connect VNets to vWAN Hub
-az network vhub connection create --resource-group $RG_NAME --hub-name $VHUB_NAME --name "conn-branch1" --remote-vnet $BRANCH1_VNET
-az network vhub connection create --resource-group $RG_NAME --hub-name $VHUB_NAME --name "conn-branch2" --remote-vnet $BRANCH2_VNET
-az network vhub connection create --resource-group $RG_NAME --hub-name $VHUB_NAME --name "conn-aks" --remote-vnet $AKS_VNET
+az network vhub connection create --resource-group $RG_NAME --vhub-name $VHUB_NAME --name "conn-branch1" --remote-vnet $BRANCH1_VNET
+az network vhub connection create --resource-group $RG_NAME --vhub-name $VHUB_NAME --name "conn-branch2" --remote-vnet $BRANCH2_VNET
+az network vhub connection create --resource-group $RG_NAME --vhub-name $VHUB_NAME --name "conn-aks" --remote-vnet $AKS_VNET
 
 # ==============================================================================
 echo "4. Deploying AKS Cluster (Azure CNI Powered by Cilium)..."
@@ -75,7 +75,7 @@ az aks create \
     --name $AKS_CLUSTER_NAME \
     --location $LOCATION \
     --node-count 1 \
-    --node-vm-size Standard_D4s_v5 \
+    --node-vm-size Standard_EC4as_v5 \
     --network-plugin azure \
     --network-dataplane cilium \
     --vnet-subnet-id $AKS_SUBNET_ID \
