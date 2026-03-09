@@ -8,9 +8,13 @@ This document explores how Check Point implements a high-speed, multi-tenant SAS
 
 ## 1. High-Level Azure Multi-Region Architecture (10,000 ft View)
 
-This topology illustrates the macroscopic routing landscape. It demonstrates how two overlapping enterprise customers (`Customer A` and `Customer B`, both using the exact same `10.0.0.0/8` IP space) are securely routed across Azure vWAN using custom Check Point VPP containers. 
+**IPv4 vs. IPv6 (SRv6) Clarification:** 
+It is critical to distinguish where traffic shifts from IPv4 to IPv6:
+*   **Customer On-Premises (Edgers):** The user's actual branch networks operate on native **IPv4** (e.g., overlapping `10.0.0.0/8`).
+*   **SASE Overlay (Data Plane):** Once inside the Check Point SASE Hub, the VPP engines translate and route packets using **IPv6 (SRv6)** to completely isolate Customer A from Customer B and to define security service chains.
+*   **Azure Underlay (vWAN):** Azure's physical switches cannot route custom SRv6 natively. Therefore, the IPv6/SRv6 traffic is encapsulated inside a standard **IPv4 UDP** packet before touching the Azure backbone. Azure merely routes standard IPv4 UDP over vWAN.
 
-Azure vWAN is used purely as a dummy physical transport, completely blind to the encapsulated BGP overlap and Check Point's SRv6 routing logic.
+This topology illustrates the macroscopic routing landscape. It demonstrates how two overlapping enterprise customers (`Customer A` and `Customer B`, both using the exact same `10.0.0.0/8` IPv4 space) are securely routed across Azure vWAN using custom Check Point VPP containers. 
 
 ```mermaid
 flowchart TD
@@ -25,34 +29,38 @@ flowchart TD
         Infinity["Check Point Infinity Portal<br/>(Management & Control Plane)"]:::aws
     end
 
-    subgraph Edges [" 🏢 Customer Edges (Overlapping IPs) "]
-        A_Branch["Customer A Edge<br/>(10.0.0.0/8)<br/>Quantum SD-WAN & Harmony"]:::custA
-        B_Branch["Customer B Edge<br/>(10.0.0.0/8)<br/>Quantum SD-WAN"]:::custB
+    %% Using separate subgraphs for edges fixes the UI text cutoff
+    subgraph EdgeA [" 🏢 Customer A Ecosystem "]
+        A_Branch["Customer A Edge<br/>(IPv4: 10.0.0.0/8)<br/>Quantum SD-WAN & Harmony"]:::custA
+    end
+
+    subgraph EdgeB [" 🏢 Customer B Ecosystem "]
+        B_Branch["Customer B Edge<br/>(IPv4: 10.0.0.0/8)<br/>Quantum SD-WAN & Harmony"]:::custB
     end
 
     subgraph RegionA [" 📍 Region A: Azure AKS (East US) "]
-        SaseHubA["Check Point SASE Hub (AKS)"]:::hw
+        SaseHubA["Check Point SASE Hub<br/>(Internal Data Plane: IPv6 SRv6)"]:::hw
     end
 
     subgraph Underlay [" 🌐 Microsoft Azure Global Backbone "]
-        vWAN{"Azure Virtual WAN Hub<br/>(Blind UDP Transport)"}:::azure
+        vWAN{"Azure Virtual WAN Hub<br/>(Blind IPv4 UDP Transport)"}:::azure
     end
 
     subgraph RegionB [" 📍 Region B: Azure AKS (West EU) "]
-        SaseHubB["Check Point SASE Hub (AKS)"]:::hw
+        SaseHubB["Check Point SASE Hub<br/>(Internal Data Plane: IPv6 SRv6)"]:::hw
     end
 
     %% Edge Connections
-    A_Branch ==>|"IPsec / ZTNA Tunnels"| SaseHubA
-    B_Branch ==>|"IPsec Tunnels"| SaseHubA
+    A_Branch ==>|"IPv4 over IPsec/ZTNA"| SaseHubA
+    B_Branch ==>|"IPv4 over IPsec"| SaseHubA
 
     %% Control Plane Connections
-    SaseHubA -. "Telemetry & API" .-> Infinity
-    SaseHubB -. "Telemetry & API" .-> Infinity
+    SaseHubA -. "Telemetry/API" .-> Infinity
+    SaseHubB -. "Telemetry/API" .-> Infinity
 
     %% Data Plane Tunnels Routing
-    SaseHubA ==>|"UDP Encapsulated SRv6 Tunnel"| vWAN
-    vWAN ==>|"UDP Encapsulated SRv6 Tunnel"| SaseHubB
+    SaseHubA ==>|"IPv6 encapsulated in IPv4 UDP Tunnel"| vWAN
+    vWAN ==>|"IPv6 encapsulated in IPv4 UDP Tunnel"| SaseHubB
 ```
 
 ---
