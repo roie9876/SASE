@@ -899,99 +899,13 @@ The Controller uses **BGP (with SRv6 extensions)** and management tunnels (e.g.,
 When a customer wants to dynamically add a "CASB Engine" to their security chain, they simply configure it in their SASE Controller UI. The Controller computes the new SRv6 SID path, programs the NVA's local cache tables, and instantly the Data Plane starts injecting the CASB's SID into the `End.AD` routing header. 
 
 **Azure's underlay is completely unaware of these changes, and no Azure APIs are ever queried.** This completely decouples the ISV's feature agility from the underlying Cloud Provider's limitations!
-## AKS Cloud-Native SASE Architecture (VPP, SRv6, and Azure vWAN)
 
-As SASE providers scale, migrating from traditional virtual machines to Cloud-Native Network Functions (CNFs) hosted on Azure Kubernetes Service (AKS) becomes critical. This architecture demonstrates how a provider (like Check Point) can deploy high-speed, dual-NIC Pods integrated with Azure's physical backbone and Virtual WAN (vWAN) using Multus, DPDK, and SR-IOV.
+---
 
-### Architecture Topology: AKS Multi-Region SASE
+## 🚀 Advanced Deployment: AKS Cloud-Native SASE Architecture
 
-This topology illustrates how two overlapping enterprise customers (`Customer A` and `Customer B` both using `10.x.x.x` subnets) can be securely routed across Azure vWAN using custom Check Point VPP containers.
+As SASE providers scale, migrating from traditional virtual machines to **Cloud-Native Network Functions (CNFs)** hosted on Azure Kubernetes Service (AKS) becomes critical. 
 
-```mermaid
-flowchart TD
-    %% Styling
-    classDef azure fill:#0078D4,stroke:#fff,stroke-width:2px,color:#fff
-    classDef custA fill:#00796B,stroke:#fff,stroke-width:2px,color:#fff
-    classDef custB fill:#E64A19,stroke:#fff,stroke-width:2px,color:#fff
-    classDef hw fill:#424242,stroke:#fff,stroke-width:2px,color:#fff
-    classDef aws fill:#FF9900,stroke:#fff,stroke-width:2px,color:#fff
-    classDef mgmt fill:#00ACC1,stroke:#fff,stroke-width:2px,color:#fff
+This requires highly advanced container networking capabilities, including **Dual-NIC Pods**, **Multus CNI**, **Azure CNI Powered by Cilium (eBPF)**, and **SR-IOV kernel bypass** to achieve Telco-grade throughput over Azure's Virtual WAN (vWAN).
 
-    subgraph AWS [" 🧠 AWS Management Cloud "]
-        Infinity["Check Point Infinity Portal"]:::aws
-    end
-
-    subgraph UsersA [" 🏢 Customer A Edge (Check Point SASE) "]
-        A_Branch["Branch Office<br/>(Quantum SD-WAN)"]:::custA
-        A_Home["Home User<br/>(Harmony Endpoint)"]:::custA
-        A_Campus["Campus Site<br/>(Quantum Gateway)"]:::custA
-    end
-
-    subgraph UsersB [" 🏢 Customer B Edge "]
-        B_Branch["Branch Office<br/>(Quantum SD-WAN)"]:::custB
-    end
-
-    subgraph RegionA [" 📍 Region A: Azure AKS (East US) "]
-        SRIOV_A["Azure Physical NIC<br/>(SR-IOV Acceleration)"]:::hw
-        
-        PodA_CustA["Customer A Pod<br/>(VPP / DPDK)"]:::custA
-        PodA_CustB["Customer B Pod<br/>(VPP / DPDK)"]:::custB
-        
-        MgmtA["eth0: Azure CNI / Cilium"]:::mgmt
-        
-        %% Pod connections inside Region A
-        PodA_CustA -. "eth0" .- MgmtA
-        PodA_CustB -. "eth0" .- MgmtA
-        PodA_CustA ==>|eth1 - Multus| SRIOV_A
-        PodA_CustB ==>|eth1 - Multus| SRIOV_A
-    end
-
-    subgraph Underlay [" 🌐 Microsoft Azure Global Backbone "]
-        vWAN{"Azure Virtual WAN Hub<br/>(UDP Transport Only)"}:::azure
-    end
-
-    subgraph RegionB [" 📍 Region B: Azure AKS (West EU) "]
-        SRIOV_B["Azure Physical NIC<br/>(SR-IOV Acceleration)"]:::hw
-        
-        PodB_CustA["Customer A Pod<br/>(VPP / DPDK)"]:::custA
-        PodB_CustB["Customer B Pod<br/>(VPP / DPDK)"]:::custB
-        
-        MgmtB["eth0: Azure CNI / Cilium"]:::mgmt
-        
-        %% Pod connections inside Region B
-        PodB_CustA -. "eth0" .- MgmtB
-        PodB_CustB -. "eth0" .- MgmtB
-        SRIOV_B ==>|eth1 - Multus| PodB_CustA
-        SRIOV_B ==>|eth1 - Multus| PodB_CustB
-    end
-
-    %% Edge Connections to Region A
-    UsersA ==>|"IPsec / ZTNA Tunnels"| SRIOV_A
-    UsersB ==>|"IPsec Tunnels"| SRIOV_A
-
-    %% API Connections
-    MgmtA -. "Telemetry & API" .-> Infinity
-    MgmtB -. "Telemetry & API" .-> Infinity
-
-    %% Data Plane Tunnels Routing
-    SRIOV_A ==>|"UDP Encapsulated SRv6"| vWAN
-    vWAN ==>|"UDP Encapsulated SRv6"| SRIOV_B
-```
-
-### Architectural Deep Dive
-
-#### 1. Dual-NIC Pods (Management vs. Data Plane)
-To satisfy Telco-grade throughput, the SASE Pods require two distinct interfaces utilizing **Multus CNI**:
-*   **`eth0` (Management):** Connected via standard **Azure CNI Powered by Cilium**. This provides highly secure, eBPF-based Kubernetes network policies for Control Plane telemetry. It reports back to the Infinity Portal in AWS.
-*   **`eth1` (Data Plane):** Dedicated entirely to raw Check Point customer payload. It bypasses Cilium and the Linux kernel completely.
-
-#### 2. High-Speed Packet Processing (KERNEL BYPASS)
-To achieve million-packet-per-second (PPS) routing within the container, the Pod's `eth1` utilizes the **Data Plane Development Kit (DPDK)**. Azure directly supports this by attaching **Accelerated Networking (SR-IOV)** Virtual Functions straight into the Pods. The host Azure OS completely ignores this traffic, handing the physical network card instructions directly to the Check Point VPP engine.
-
-#### 3. Overcoming Azure vWAN & IPv6 Overlap Limitations
-Azure vWAN is an incredibly powerful global transit layer, but it is deeply intolerant of overlapping BGP IPv4 spaces. In our diagram, Customer A and Customer B both use `10.0.0.0/8`. 
-*   **The Problem:** If Check Point injected those overlapping routes directly into the Azure vWAN Hub, the Azure BGP tables would instantly collide. Furthermore, if the VPP engine transmits a raw **SRv6** packet, Azure's physical switches would drop the custom headers.
-*   **The "Over-The-Top" Solution:** Check Point utilizes vWAN strictly as a physical transport. The VPP pod logic isolates the overlapping IPv4 payloads, wraps them in SRv6 routing logic, and finally encapsulates the entire data structure inside a standard IPv4 UDP packet. Azure vWAN routes the encapsulating UDP packet seamlessly across global regions without ever touching the sensitive overlapping customer data hidden inside.
-
-#### 4. The Role of Azure CNI Powered by Cilium
-If an ISV prefers not to build their own CNI from scratch (BYO-CNI), **Azure CNI Powered by Cilium** is the recommended default for the `eth0` control plane. Cilium utilizes eBPF (Extended Berkeley Packet Filter) to provide extremely lightweight, highly scalable network policies and observability. It tightly locks down the management plane of the Pod ensuring it can only communicate with the authorized AWS APIs, leaving `eth1` completely unbound for raw data transit.
+👉 **[Read the Full Check Point AKS Architecture & Diagrams Here](./checkpoint_aks_sase.md)**
