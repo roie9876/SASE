@@ -103,10 +103,10 @@ The architecture operates across three main layers: the network endpoints, the c
 
 #### 1. The Cloud Security Edge (Harmony SASE Global PoPs)
 Check Point operates a global backbone of Points of Presence (PoPs) that act as the SASE gateway. When user or branch traffic hits this edge, it is inspected and routed securely.
-* **ZTNA (Zero Trust Network Access):** Grants remote users least-privilege access to specific corporate applications (in the cloud or on-premise) based on identity and device posture. This completely shields internal networks from the open internet without relying on traditional VPNs.
-* **Internet Access / SWG (Secure Web Gateway):** Secures users while browsing the web by blocking access to malicious domains, filtering URLs, and preventing malware downloads.
-* **CASB (Cloud Access Security Broker):** Discovers Shadow IT, controls sensitive data sharing (DLP), and protects against account takeovers in authorized SaaS environments (like M365 or Salesforce).
-* **FWaaS (Firewall as a Service):** Applies Check Point's industry-leading Next-Generation Firewall (NGFW) policies—including intrusion prevention (IPS) and application control—entirely from the cloud, eliminating the need for heavy branch firewalls.
+* **ZTNA (Zero Trust Network Access - Harmony Connect):** Grants remote users least-privilege access to specific corporate applications (in the cloud, including Azure VNets, or on-premise) based on identity, context, and rich device posture checks. It establishes a secure authenticated micro-tunnel per application session, completely shielding internal networks from the open internet and replacing legacy, vulnerable VPN gateways.
+* **Internet Access / SWG (Secure Web Gateway - Harmony Browse):** Secures users while browsing the web regardless of location. It operates by blocking access to malicious domains (phishing, C&C networks), enforcing granular URL filtering policies, and utilizing in-browser and cloud-based deep inspection to prevent zero-day malware downloads before they reach the endpoint.
+* **CASB (Cloud Access Security Broker - Harmony Email & Collaboration):** Provides deep API-level integration with authorized SaaS environments (like Microsoft 365, Google Workspace, or Salesforce). It discovers unsanctioned "Shadow IT", enforces Data Loss Prevention (DLP) to stop sensitive data sharing, and leverages AI to protect against account takeovers and sophisticated phishing attacks in cloud mailboxes.
+* **FWaaS (Firewall as a Service - CloudGuard Network Security):** Applies Check Point's industry-leading Next-Generation Firewall (NGFW) policies directly from the cloud or the Azure Hub. This includes deep packet inspection, intrusion prevention systems (IPS), anti-bot, and application control—eliminating the need for expensive, heavy physical firewalls at the branch.
 
 #### 2. The Network Edge (Quantum SD-WAN)
 * **Quantum SD-WAN & Quantum Gateways:** Hardware and software appliances deployed at branch locations. These edge devices intelligently route traffic across multiple WAN links (Broadband, 5G, MPLS). They ensure business-critical applications get highest priority while securely tunnelling Internet and Cloud-bound traffic to the Harmony SASE PoPs for security inspection.
@@ -124,8 +124,8 @@ flowchart LR
     Branch(["🏢 Branch Offices<br/>(Quantum SD-WAN)"])
     
     %% Main SASE Fabric
-    subgraph CP_SASE [" ☁️ Check Point Harmony SASE (Global PoPs) "]
-        subgraph Secure_Edge [" Security Service Edge (SSE) "]
+    subgraph CP_SASE ["  ☁️ Check Point Harmony SASE (Global PoPs)  "]
+        subgraph Secure_Edge ["  Security Service Edge (SSE)  "]
             ZTNA["ZTNA<br/>(Zero Trust)"]
             SWG["SWG<br/>(Web Gateway)"]
             CASB["CASB<br/>(SaaS Sec)"]
@@ -235,7 +235,7 @@ flowchart TB
 
 ## SASE Reference Architecture in Azure
 
-To understand how an ISV builds a custom SASE fabric in Azure (deployed dedicated-per-customer) without using managed Network services (like Virtual WAN), we must visualize the separation between the **Azure Underlay** and the **ISV Overlay**. High-performance NVAs (Network Virtual Appliances) hosted in VMs act as the core routing fabric.
+To understand how an ISV builds a custom SASE fabric in Azure (deployed dedicated-per-customer) without using managed Network services (like Virtual WAN), we must visualize the separation between the **Azure Underlay** and the **ISV Overlay**. High-performance NVAs (like Check Point CloudGuard Gateway) hosted in VMs act as the core routing fabric.
 
 ### Cloud Hub & Spoke Connectivity Model
 
@@ -250,8 +250,8 @@ flowchart TD
 
     subgraph ISV_SASE_Overlay [" Customer-Dedicated SASE Overlay Fabric (BGP & SRv6 aware) "]
         direction LR
-        NVA1["Dedicated SASE Hub 1<br/>(Azure East US)"]:::nva
-        NVA2["Dedicated SASE Hub 2<br/>(Azure West EU)"]:::nva
+        NVA1["Check Point CloudGuard Hub 1<br/>(Azure East US)"]:::nva
+        NVA2["Check Point CloudGuard Hub 2<br/>(Azure West EU)"]:::nva
         
         %% Core overlay connectivity
         NVA1 <== "Internal Overlay Tunnel<br/>(SRv6 over UDP + BGP)" ==> NVA2
@@ -263,9 +263,9 @@ flowchart TD
     end
     
     subgraph Customer_Edges [" Customer Edge Locations "]
-        Branch["Branch Office<br/>(SD-WAN CPE)"]:::edge
+        Branch["Branch Office<br/>(Quantum SD-WAN CPE)"]:::edge
         HQ["On-Prem Data Center<br/>(Core Router)"]:::edge
-        User["Remote User<br/>(ZTNA Agent)"]:::edge
+        User["Remote User<br/>(Harmony ZTNA Agent)"]:::edge
     end
     
     %% Edge connections to NVAs
@@ -756,7 +756,7 @@ In an **SRv6 Overlay model**, the ISV abstracts the chain from the Azure network
 
 ### How it looks in Architecture: Underlay vs. Overlay
 
-This diagram shows how a packet from a client is encapsulated at the edge, routed across the "dumb" Azure UDP underlay, and proxy-chained through SR-unaware security engines (like a FWaaS or SWG engine) using SRv6 `End.AD` behaviors.
+This diagram shows how a packet from a client is encapsulated at the edge, routed across the "dumb" Azure UDP underlay, and proxy-chained through SR-unaware security engines (like Check Point CloudGuard or Harmony engines) using SRv6 `End.AD` behaviors.
 
 ```mermaid
 flowchart TD
@@ -766,24 +766,24 @@ flowchart TD
     classDef secApp fill:#FFB900,stroke:#fff,stroke-width:2px,color:#333
     classDef endUser fill:#505050,stroke:#fff,stroke-width:2px,color:#fff
 
-    Client["Client / Branch"]:::endUser
+    Client["Quantum SD-WAN / Harmony Agent"]:::endUser
 
     classDef legendBox fill:#f9f9f9,stroke:#666,stroke-width:1px,color:#333
 
-    subgraph Legend [" Diagram Legend "]
+    subgraph Legend ["  Diagram Legend  "]
         L1("fa:fa-arrow-right Bold Line: Encapsulated (Azure is BLIND)"):::legendBox
         L2("fa:fa-long-arrow-alt-right Thin Line: Raw IPv4 (Azure Route/UDR)"):::legendBox
     end
 
-    subgraph Logical_Overlay [" Customer-Dedicated SRv6 Overlay Data Plane (Logical Service Chain) "]
+    subgraph Logical_Overlay ["  Customer-Dedicated SRv6 Overlay Data Plane (Logical Service Chain)  "]
         direction LR
         Ingress["SASE Gateway Proxy<br/>(Node A)"]:::proxy
         ProxyB["SRv6 Proxy (End.AD)<br/>(Node B)"]:::proxy
         ProxyC["SRv6 Proxy (End.AD)<br/>(Node C)"]:::proxy
         Egress["Internet Egress"]:::endUser
         
-        IPS["FWaaS Engine<br/>(SR-Unaware VM/Container)"]:::secApp
-        DLP["SWG / CASB Engine<br/>(SR-Unaware VM/Container)"]:::secApp
+        IPS["CloudGuard FWaaS Engine<br/>(SR-Unaware VM/Container)"]:::secApp
+        DLP["Harmony Browse / CASB Engine<br/>(SR-Unaware VM/Container)"]:::secApp
         
         Ingress == "SID_B (SRv6+UDP)" ==> ProxyB
         ProxyB -- "Strips SRH<br/>Raw IPv4" --> IPS
@@ -794,7 +794,7 @@ flowchart TD
         ProxyC == "Decapsulated" ==> Egress
     end
     
-    subgraph Azure_Underlay [" Azure Native VNet Transport (Customer Dedicated VNet) "]
+    subgraph Azure_Underlay ["  Azure Native VNet Transport (Customer Dedicated VNet)  "]
         direction LR
         VNet["Azure SDN / Hypervisor<br/>(Only sees standard UDP traffic between VMs)"]:::cloud
     end
@@ -829,29 +829,29 @@ sequenceDiagram
     
     box rgb(40,40,40) Customer Dedicated Azure VNet
         participant AZ as Azure Fabric (Underlay)
-        participant SDWAN as SD-WAN NVA (vRouter)
-        participant FWAAS as FWaaS Engine
-        participant SWG as SWG / CASB Engine
+        participant SDWAN as Quantum SD-WAN NVA
+        participant FWAAS as CloudGuard FWaaS
+        participant SWG as Harmony Browse / CASB
     end
 
     Note over AZ,SDWAN: Packet enters Azure as:<br/>[Outer IP] + [UDP] + [SRv6] + [Client Data]
     AZ->>SDWAN: Delivers standard UDP packet
     
-    Note over SDWAN: SDWAN terminates UDP tunnel.<br/>Exposes inner SRv6 Header & identifies End.AD SID for FWaaS.
+    Note over SDWAN: Quantum Edge terminates UDP tunnel.<br/>Exposes inner SRv6 Header & identifies End.AD SID for FWaaS.
     SDWAN->>SDWAN: Caches SRv6 Header in RAM
     
     Note over SDWAN,FWAAS: Packet is now bare:<br/>[Raw Client Data] (e.g. standard IPv4/IPv6)
     SDWAN->>FWAAS: Forwards RAW packet over local interface
     
-    Note over FWAAS: FWaaS reads raw traffic natively<br/>(Executes Firewall & IDS policies)
+    Note over FWAAS: CloudGuard FWaaS reads raw traffic natively<br/>(Executes Firewall & IDS policies)
     
     FWAAS->>SDWAN: Returns clean RAW packet
     
-    SDWAN->>SDWAN: Retrieves cached SRv6 Header.<br/>Updates to next SID in chain (SWG/CASB).
+    SDWAN->>SDWAN: Retrieves cached SRv6 Header.<br/>Updates to next SID in chain (Harmony).
     SDWAN->>SDWAN: Caches new SRv6 Header in RAM
     
     SDWAN->>SWG: Forwards RAW packet over local interface
-    Note over SWG: SWG filters URLs and CASB inspects SaaS traffic
+    Note over SWG: Harmony Browse filters URLs and Harmony Email & Collaboration inspects SaaS traffic
     SWG->>SDWAN: Returns clean RAW packet
     
     SDWAN->>SDWAN: Retrieves cached SRv6 Header.<br/>Updates to Exit/Egress routing.
