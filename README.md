@@ -909,3 +909,5 @@ As SASE providers scale, migrating from traditional virtual machines to **Cloud-
 This requires highly advanced container networking capabilities, including **Dual-NIC Pods**, **Multus CNI**, **Azure CNI Powered by Cilium (eBPF)**, and **SR-IOV kernel bypass** to achieve Telco-grade throughput over Azure's Virtual WAN (vWAN).
 
 👉 **[Read the Full Check Point AKS Architecture & Diagrams Here](./checkpoint_aks_sase.md)**
+
+👉 **[Read the Azure vWAN Global Scale & Limits Breakdown Here](./azure_vwan_scale.md)**

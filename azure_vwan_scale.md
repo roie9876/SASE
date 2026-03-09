@@ -1,0 +1,82 @@
+# Azure vWAN Global Scale & Performance in the SASE Architecture
+
+When engineering a carrier-grade SASE deployment for large enterprises, understanding the underlying capabilities—and limitations—of the cloud provider's network fabric is critical. 
+
+This document illustrates how Check Point leverages **Azure Virtual WAN (vWAN)** as an incredibly fast but "dumb" global transit mechanism spanning multiple geographic regions, while simultaneously bypassing Azure's inherent software-defined networking (SDN) scale limits.
+
+---
+
+## 1. Multi-Region vWAN Global Fabric Topology
+
+The following diagram isolates the Azure global transit layer across three major geographies (Americas, EMEA, and APAC). 
+
+Notice that **Azure vWAN does zero complex security routing**. It strictly acts as a high-speed, 50 Gbps pure-UDP bridge allowing the isolated regional Check Point SASE hubs to form a global mesh network.
+
+```mermaid
+flowchart TD
+    %% Styling
+    classDef vwan fill:#0078D4,stroke:#fff,stroke-width:2px,color:#fff
+    classDef cp fill:#424242,stroke:#fff,stroke-width:2px,color:#fff
+    classDef fiber fill:#005A9E,stroke:#fff,stroke-width:2px,color:#fff
+    
+    subgraph GeoUS [" 🌎 Region A: Americas (East US) "]
+        direction TB
+        SaseUS["Check Point SASE Hub<br/>(VPP/DPDK)"]:::cp
+    end
+    
+    subgraph GeoEU [" 🌍 Region B: EMEA (West EU) "]
+        direction TB
+        SaseEU["Check Point SASE Hub<br/>(VPP/DPDK)"]:::cp
+    end
+    
+    subgraph GeoAsia [" 🌏 Region C: APAC (Southeast Asia) "]
+        direction TB
+        SaseAsia["Check Point SASE Hub<br/>(VPP/DPDK)"]:::cp
+    end
+
+    subgraph AzureBackbone [" 🌐 Microsoft Azure Global Backbone (Dark Fiber Fabric) "]
+        direction LR
+        HubUS{"vWAN Hub<br/>(East US)"}:::vwan
+        HubEU{"vWAN Hub<br/>(West EU)"}:::vwan
+        HubAsia{"vWAN Hub<br/>(Southeast Asia)"}:::vwan
+        
+        %% Hub to Hub native mesh
+        HubUS <== "Any-to-Any Anycast Mesh<br/>(Up to 50 Gbps per Link)" ==> HubEU
+        HubEU <== "Any-to-Any Anycast Mesh<br/>(Up to 50 Gbps per Link)" ==> HubAsia
+        HubUS <== "Any-to-Any Anycast Mesh<br/>(Up to 50 Gbps per Link)" ==> HubAsia
+    end
+    
+    %% SASE to Hub attachments
+    SaseUS == "UDP Encapsulated Overlay" === HubUS
+    SaseEU == "UDP Encapsulated Overlay" === HubEU
+    SaseAsia == "UDP Encapsulated Overlay" === HubAsia
+```
+
+---
+
+## 2. vWAN Scale Metrics & The Overlay Advantage
+
+When relying *solely* on native cloud provider firewalls or Gateways, customers bump into harsh cloud-managed limitations. Here is a breakdown of maximum Azure limits versus the capabilities unlocked by this Check Point overlay architecture.
+
+### A. Raw Throughput (Bandwidth)
+*   **Azure vWAN Native Limit:** A single Azure Virtual Hub scales its routing infrastructure up to a maximum of **50 Gbps**. 
+*   **The Check Point Advantage:** By keeping traffic entirely off Azure's managed Network Virtual Appliances (like Azure Firewall, which introduces latency), we saturate the maximum 50 Gbps pipe using raw UDP transit. If an enterprise needs 100 Gbps, we can deploy an additional parallel Virtual Hub within the same region to scale horizontally.
+
+### B. Route Scale (BGP Limitations)
+*   **Azure vWAN Native Limit:** Azure vWAN Hubs support up to a maximum of **10,000 routes**. Standard Azure VPN Gateways often cap out at 1,000–4,000 routes. For a large enterprise or telco with millions of subnets and overlapping IP spaces, this limit is a catastrophic bottleneck.
+*   **The Check Point Advantage:** **Infinite Route Scale.** Because the Check Point architecture encapsulates all internal SD-WAN routes, overlapping IPs, and SRv6 telemetry inside standard UDP payloads, the Azure vWAN BGP table only sees a handful of regional Hub IP addresses. The VPP engines operating inside the Check Point pods maintain the actual millions of BGP entries completely out of Azure's sight.
+
+### C. Packets Per Second (PPS) & Kernel Bypass
+*   **Azure vWAN Native Limit:** Standard Azure Virtual Machines process traffic through the host OS virtual switch (vSwitch), which introduces CPU interrupt latency. Non-accelerated VMs top out at around `1M to 2M` Packets Per Second (PPS).
+*   **The Check Point Advantage:** **Up to ~30 Million PPS.** By attaching **SR-IOV (Accelerated Networking)** directly to the AKS nodes, the physical Azure NIC bypasses the vSwitch and funnels traffic directly into the Check Point container's **DPDK (Data Plane Development Kit)** memory space. This completely negates Azure's software SDN friction, enabling Telco-level minimum-latency line rates.
+
+### D. Connections Per Second (CPS) & Concurrent Flows
+*   **Azure vWAN Native Limit:** Managed stateful Azure services (like NAT Gateways or Azure Firewalls) track session states. At extreme scale (millions of concurrent sessions or hundreds of thousands of CPS), SNAT port exhaustion or state table memory caps occur.
+*   **The Check Point Advantage:** vWAN treats the UDP overlay tunnels as a handful of massive *stateless* flows (using ECMP - Equal-Cost Multi-Path routing under the hood). The connection state tracking (CPS/Concurrent Flows) is entirely shifted to the Check Point CloudGuard engines. Properly sized Check Point instances can sustain **10+ Million concurrent connections** per cluster, completely mitigating Azure native state-table wipeouts.
+
+---
+
+### Summary
+In this SASE architecture, **Azure vWAN is utilized exclusively for what Microsoft does best:** laying transatlantic dark fiber and switching dumb UDP packets at 50 Gbps speeds. 
+
+**Check Point provides what it does best:** carrier-grade BGP scale, high-capacity SRv6 tracking, massive stateful connection retention, and Sub-second DPDK throughput.
