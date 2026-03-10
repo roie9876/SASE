@@ -1,0 +1,39 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: vpp-router
+spec:
+  containers:
+  - name: vpp
+    image: ubuntu:22.04
+    command: [ "sleep", "infinity" ]
+    securityContext:
+      privileged: true
+    volumeMounts:
+    - name: uio
+      mountPath: /dev/infiniband
+    - name: pci
+      mountPath: /sys/bus/pci
+    - name: dshm
+      mountPath: /dev/shm
+    - name: hugepages
+      mountPath: /dev/hugepages
+  volumes:
+  - name: uio
+    hostPath:
+      path: /dev/infiniband
+      type: Directory
+  - name: pci
+    hostPath:
+      path: /sys/bus/pci
+      type: Directory
+  - name: dshm
+    emptyDir:
+      medium: Memory
+      sizeLimit: "512Mi"
+  - name: hugepages
+    hostPath:
+      path: /dev/hugepages
+      type: DirectoryOrCreate
+  nodeSelector:
+    kubernetes.io/hostname: aks-nodepool1-28634093-vmss000000

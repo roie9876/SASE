@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: debug-pci
+spec:
+  hostNetwork: true
+  containers:
+  - name: debug
+    image: ubuntu
+    command: ["sleep", "infinity"]
+    securityContext:
+      privileged: true

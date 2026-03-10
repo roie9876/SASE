@@ -1,0 +1,12 @@
+apiVersion: "k8s.cni.cncf.io/v1"
+kind: NetworkAttachmentDefinition
+metadata:
+  name: sriov-network
+  annotations:
+    k8s.v1.cni.cncf.io/resourceName: intel.com/sriov_net
+spec:
+  config: '{
+  "type": "host-device",
+  "cniVersion": "0.3.1",
+  "name": "sriov-network"
+}'

@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sriovdp-config
+  namespace: kube-system
+data:
+  config.json: |
+    {
+      "resourceList": [{
+          "resourceName": "sriov_net",
+          "deviceType": "vfio",
+          "selectors": {
+              "vendors": ["15b3", "1414"],
+              "devices": ["101a", "1004", "101e", "00ba"],
+              "drivers": ["vfio-pci", "mlx5_core"]
+          }
+      }]
+    }
