@@ -313,6 +313,9 @@ kubectl wait --for=condition=Ready pod/vpp-sriov --timeout=30s
 ```
 
 *Example `vpp-sriov.yaml` Snippet:*
+
+> **Note**: The actual deployed YAML uses `ubuntu:22.04` as the base image with manual VPP package installation (`apt-get install -y vpp vpp-plugin-core`), because the `ligato/vpp-base` image may not include the specific VPP version and plugins needed for this POC. See the actual [vpp-sriov.yaml](../vpp-sriov.yaml) for the production manifest.
+
 ```yaml
 apiVersion: v1
 kind: Pod
@@ -321,9 +324,11 @@ metadata:
   annotations:
     k8s.v1.cni.cncf.io/networks: sriov-lan, sriov-wan
 spec:
+  nodeName: aks-dpdkpool-XXXXX-vmss000000  # Pin to dpdkpool node!
   containers:
   - name: vpp
-    image: ligato/vpp-base:latest
+    image: ubuntu:22.04
+    command: ["/bin/sleep", "infinity"]
     securityContext:
       privileged: true
     volumeMounts:
@@ -561,7 +566,7 @@ The SRv6 SID **IS the customer identifier**. No separate VLAN tagging, VNI mappi
 - `fc00::b` → Customer B
 - The VPP `End.DT4` behavior automatically maps SID → VRF table → isolated FIB
 
-This is the same architecture used by major telcos (SoftBank, Deutsche Telekom) for multi-tenant network slicing.
+This uses the same SRv6 concepts (SID-to-VRF mapping for tenant isolation) employed by major telcos like SoftBank and Deutsche Telekom in their commercial SRv6 deployments, adapted here for a cloud-native Kubernetes environment.
 
 ---
 
@@ -922,7 +927,7 @@ vpp startup.conf: dpdk { uio-driver uio_pci_generic dev b1fd:00:02.0 }
 | Bifurcated driver conflict | Single VF shared between CNI and DPDK | Yes — provide second VF via device plugin |
 | No device plugin | `sriov-network-device-plugin` not available | Yes — ship as AKS add-on |
 
-**For comparison**: AWS EKS supports DPDK via the ENA driver with documented guides. GCP GKE supports DPDK via gVNIC. Azure AKS has zero documentation or support path for DPDK inside pods.
+**For comparison**: AWS provides documented DPDK support via the ENA driver for EC2/EKS workloads. GCP supports DPDK via the gVNIC driver on GCE instances. Azure AKS has zero documentation or support path for DPDK inside pods.
 
 ---
 

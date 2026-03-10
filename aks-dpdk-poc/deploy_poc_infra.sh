@@ -75,7 +75,7 @@ az aks create \
     --name $AKS_CLUSTER_NAME \
     --location $LOCATION \
     --node-count 1 \
-    --node-vm-size Standard_EC4as_v5 \
+    --node-vm-size Standard_D4s_v5 \
     --network-plugin azure \
     --network-dataplane cilium \
     --vnet-subnet-id $AKS_SUBNET_ID \

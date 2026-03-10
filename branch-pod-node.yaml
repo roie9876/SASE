@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: branch-pod
+  annotations:
+    k8s.v1.cni.cncf.io/networks: sriov-wan
+spec:
+  nodeName: aks-dpdkpool-11331723-vmss000000
+  containers:
+  - name: branch
+    image: ubuntu:22.04
+    command: ["/bin/sleep", "3650d"]
+    securityContext:
+      privileged: true

@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: debug-huge
+spec:
+  nodeName: aks-hugepool-28158901-vmss000000
+  containers:
+  - name: debug
+    image: ubuntu:22.04
+    command: ["/bin/sleep", "infinity"]
+    securityContext:
+      privileged: true
+    volumeMounts:
+    - name: sys
+      mountPath: /sys
+  volumes:
+  - name: sys
+    hostPath:
+      path: /sys

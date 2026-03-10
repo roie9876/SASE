@@ -38,12 +38,15 @@ When you need to handle more customer IPsec tunnels or process more raw Gbps thr
 
 | Azure VM Size (Example) | vCPU Core Count | SR-IOV Supported? | Maximum Permitted Bandwidth (QoS Limit) | Role |
 | :--- | :--- | :--- | :--- | :--- |
-| `Standard_D4s_v5` | 4 vCPUs | ✅ Yes | **12.5 Gbps / ~1,000,000 PPS** | Educational POC / Lab |
-| `Standard_D16s_v5` | 16 vCPUs | ✅ Yes | **25.0 Gbps / ~2,000,000 PPS** | Small Regional Hub |
-| `Standard_F32s_v2` | 32 vCPUs | ✅ Yes | **32.0 Gbps / ~4,000,000 PPS** | Production Check Point SASE Hub |
-| `Standard_F72s_v2` | 72 vCPUs | ✅ Yes | **40.0 Gbps+ / ~8,000,000 PPS** | Dense Enterprise Gateway Hub |
+| `Standard_D4s_v5` | 4 vCPUs | ✅ Yes | **12.5 Gbps** | Educational POC / Lab |
+| `Standard_D16s_v5` | 16 vCPUs | ✅ Yes | **12.5 Gbps** | Small Regional Hub |
+| `Standard_D32s_v5` | 32 vCPUs | ✅ Yes | **16.0 Gbps** | Medium Regional Hub |
+| `Standard_F32s_v2` | 32 vCPUs | ✅ Yes | **16.0 Gbps** | Production Check Point SASE Hub |
+| `Standard_F72s_v2` | 72 vCPUs | ✅ Yes | **30.0 Gbps** | Dense Enterprise Gateway Hub |
 
-*Therefore, the SR-IOV Multus design remains identical whether you are pushing 100 Mbps or 40 Gbps. The only variable that changes is the underlying AKS Node SKU limit.*
+> **Note**: PPS (Packets Per Second) values are not published by Microsoft per VM SKU. The bandwidth values above are "Expected Network Bandwidth" from [Azure VM size documentation](https://learn.microsoft.com/en-us/azure/virtual-machines/sizes/). Actual PPS depends on packet size, CPU utilization, and whether DPDK kernel bypass is used.
+
+*Therefore, the SR-IOV Multus design remains identical whether you are pushing 100 Mbps or 30 Gbps. The only variable that changes is the underlying AKS Node SKU bandwidth limit.*
 
 ---
 

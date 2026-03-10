@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: hugepage-setup
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      name: hugepages
+  template:
+    metadata:
+      labels:
+        name: hugepages
+    spec:
+      hostNetwork: true
+      hostPID: true
+      hostIPC: true
+      containers:
+      - name: sysctl
+        image: ubuntu:22.04
+        securityContext:
+          privileged: true
+        command:
+        - nsenter
+        - --target
+        - "1"
+        - --mount
+        - --uts
+        - --ipc
+        - --net
+        - --pid
+        - --
+        - bash
+        - -c
+        - |
+          echo 1024 > /sys/devices/system/node/node0/hugepages/hugepages-2048kB/nr_hugepages
+          systemctl restart kubelet
+          sleep infinity

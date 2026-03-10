@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: vpp-working
+spec:
+  containers:
+  - name: vpp
+    image: ubuntu:22.04
+    command: ["/bin/sleep", "infinity"]
+    securityContext:
+      privileged: true

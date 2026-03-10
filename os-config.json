@@ -1,0 +1,6 @@
+{
+  "sysctls": {
+    "vmNrHugepages": 1024
+  },
+  "transparentHugePage": "always"
+}
