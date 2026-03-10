@@ -36,11 +36,14 @@ graph TD
         AKS_VNET["AKS VNet<br/>10.100.0.0/16"]:::azure
         
         subgraph workernode ["Worker Node - Standard_D4s_v5"]
-            NODE_OS["Ubuntu Linux Kernel<br/>Azure CNI / Cilium"]:::aks
+            NODE_OS["Ubuntu Linux Kernel<br/>Azure CNI / eth0"]:::aks
             NIC1["Physical Mellanox NIC<br/>Accelerated Networking"]:::aks
             
-            subgraph vpppod ["Open Source VPP Pod (Privileged)"]
-                VPP["FD.io VPP<br/>Kernel Bypass DPDK"]:::pod
+            MULTUS{"Multus CNI MACVLAN<br/>(Logical Split)"}:::aks
+            NIC1 --> MULTUS
+            
+            subgraph vpppod ["Open Source VPP Pod (Privileged + HugePages)"]
+                VPP["FD.io VPP<br/>(AF_PACKET Binding)"]:::pod
                 VRF_A{VRF A}
                 VRF_B{VRF B}
                 
@@ -58,7 +61,8 @@ graph TD
     AKS_VNET -.->|Customer Payload| NIC1
     
     NODE_OS -->|"eth0 / K8s API"| VPP
-    NIC1 == "eth1 - Both Branches Terminate Here" ==> VPP
+    MULTUS == "net1 (sriov-lan)" ==> VPP
+    MULTUS == "net2 (sriov-wan)" ==> VPP
     
     VRF_A == "veth pair / tap" ==> PODA
     VRF_B == "veth pair / tap" ==> PODB
