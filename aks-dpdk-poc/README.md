@@ -96,53 +96,55 @@ graph TD
     classDef aks fill:#c8e6c9,stroke:#333,stroke-width:2px,color:#000
     classDef pod fill:#ffcc80,stroke:#333,stroke-width:2px,color:#000
     classDef app fill:#e1bee7,stroke:#333,stroke-width:2px,color:#000
+    classDef srv6 fill:#ffcdd2,stroke:#c62828,stroke-width:2px,color:#000
+    classDef tunnel fill:#e0e0e0,stroke:#616161,stroke-width:2px,color:#000
 
-    subgraph branches ["Simulated Branches"]
-        B1["Branch 1 VM<br/>IP: 192.168.1.10"]:::branch
-        B2["Branch 2 VM<br/>IP: 192.168.1.10<br/>(Overlapping IP!)"]:::branch
+    subgraph branches ["Simulated Branches (Same VNet)"]
+        B1["Branch VM (Customer A)<br/>eth0: 10.110.2.4<br/>vxlan100: 10.50.0.2 + fc00::2"]:::branch
+        B1_ENC["Linux SRv6 Encap<br/>10.20.0.0/16 → seg6 encap<br/>SID: fc00::a:1:e004"]:::srv6
+        B1 --> B1_ENC
     end
 
-    subgraph backbone ["Azure Backbone"]
-        vWAN(("Azure Virtual WAN Hub<br/>Handles BGP & Routing")):::azure
-        
-        B1 -->|IPsec/VNet Peering| vWAN
-        B2 -->|IPsec/VNet Peering| vWAN
+    subgraph tunnel_layer ["VXLAN Overlay (UDP:8472)"]
+        VXLAN_TUN["VXLAN VNI 100<br/>Outer: 10.110.2.4 → Pod IP<br/>Inner: IPv6 + SRH<br/>Port 8472 (NOT 4789!)"]:::tunnel
+        B1_ENC -->|"SRv6 inside VXLAN"| VXLAN_TUN
     end
 
-    subgraph akshub ["AKS SASE Hub Cluster"]
-        AKS_VNET["AKS VNet<br/>10.100.0.0/16"]:::azure
-        
-        subgraph workernode ["Worker Node - Standard_D4s_v5"]
-            NODE_OS["Ubuntu Linux Kernel<br/>Azure CNI / eth0"]:::aks
-            NIC1["Physical Mellanox NIC<br/>Accelerated Networking"]:::aks
+    subgraph akshub ["AKS SASE Hub (Sweden Central)"]
+        subgraph workernode ["AKS Node: aks-dpdkpool (Standard_D4s_v5)"]
             
-            MULTUS{"Multus CNI MACVLAN<br/>(Logical Split)"}:::aks
-            NIC1 --> MULTUS
-            
-            subgraph vpppod ["Open Source VPP Pod (Privileged + HugePages)"]
-                VPP["FD.io VPP<br/>(AF_PACKET Binding)"]:::pod
-                VRF_A{VRF A}
-                VRF_B{VRF B}
-                
-                VPP --- VRF_A
-                VPP --- VRF_B
+            subgraph vpppod ["vpp-sriov Pod (privileged + HugePages + Multus)"]
+                LINUX_VXLAN["Linux vxlan100<br/>(decaps VXLAN outer)<br/>No Linux IP assigned"]:::aks
+                AFPACKET["VPP af-packet<br/>host-vxlan100<br/>IPv4: 10.50.0.1/30<br/>IPv6: fc00::1/64"]:::pod
+
+                subgraph srv6_engine ["VPP SRv6 Engine"]
+                    SRV6_TABLE["SRv6 LocalSID Table"]:::srv6
+                    SID_A["fc00::a:1:e004<br/>→ End.DT4 table 0<br/>(Customer A)"]:::srv6
+                    SID_B["fc00::b:1:e004<br/>→ End.DT4 table 2<br/>(Customer B)"]:::srv6
+                    SRV6_TABLE --- SID_A
+                    SRV6_TABLE --- SID_B
+                end
+
+                VPP_LAN["VPP host-net1<br/>10.20.0.254/16<br/>(LAN Gateway)"]:::pod
+                VPP_WAN["VPP host-net2<br/>10.30.0.254/16<br/>(WAN Gateway)"]:::pod
+
+                LINUX_VXLAN --> AFPACKET
+                AFPACKET --> SRV6_TABLE
+                SID_A -->|"Decap SRv6 → IPv4 FIB 0"| VPP_LAN
+                SID_B -->|"Decap SRv6 → IPv4 FIB 2"| VPP_LAN
             end
-            
-            PODA["Customer A Dummy Pod<br/>IP: 10.0.0.5"]:::app
-            PODB["Customer B Dummy Pod<br/>IP: 10.0.0.5<br/>(Overlapping Internal IP!)"]:::app
+
+            subgraph client_pods ["Customer Service Pods"]
+                PODA["client-pod (Customer A)<br/>net1: 10.20.1.24/16<br/>iperf3 server"]:::app
+                PODB["customer-b-pod<br/>net1: 10.20.1.30/16<br/>(Same IP range!)"]:::app
+            end
+
+            VPP_LAN -->|"macvlan L2 (same node)"| PODA
+            VPP_LAN -.->|"VRF 2 → macvlan"| PODB
         end
     end
 
-    vWAN -->|All traffic routed| AKS_VNET
-    AKS_VNET -->|Mgmt Traffic| NODE_OS
-    AKS_VNET -.->|Customer Payload| NIC1
-    
-    NODE_OS -->|"eth0 / K8s API"| VPP
-    MULTUS == "net1 (sriov-lan)" ==> VPP
-    MULTUS == "net2 (sriov-wan)" ==> VPP
-    
-    VRF_A == "veth pair / tap" ==> PODA
-    VRF_B == "veth pair / tap" ==> PODB
+    VXLAN_TUN -->|"Azure SDN routes<br/>outer IPv4 packet"| LINUX_VXLAN
 ```
 
 ---
