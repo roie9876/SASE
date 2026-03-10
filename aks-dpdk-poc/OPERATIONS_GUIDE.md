@@ -7,7 +7,9 @@
 4. [Complete Setup: From Zero to Working](#complete-setup-from-zero-to-working)
 5. [Recovery Procedures](#recovery-procedures)
 6. [Performance Testing (iperf3)](#performance-testing-iperf3)
-7. [TCP Checksum Issue: Deep Dive](#tcp-checksum-issue-deep-dive)
+7. [SRv6 Multi-Tenant Routing](#srv6-multi-tenant-routing)
+8. [TCP Checksum Issue: Deep Dive](#tcp-checksum-issue-deep-dive)
+9. [VPP Command Reference](#vpp-command-reference)
 8. [af-packet vs DPDK: Why Production Needs DPDK](#af-packet-vs-dpdk-why-production-needs-dpdk)
 9. [Lessons Learned from Azure AKS](#lessons-learned-from-azure-aks)
 
