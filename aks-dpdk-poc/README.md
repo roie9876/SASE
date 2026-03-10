@@ -1010,6 +1010,97 @@ Native SRv6 (what Azure blocks):
 
 This finding should be raised with Microsoft — SRv6 is a critical technology for telco/ISP network slicing and SASE architectures.
 
+---
+
+## MTU / Jumbo Frame Test: Azure Supports Up to ~4028 Bytes
+
+### Background
+
+Azure VMs default to MTU 1500, but [Microsoft docs](https://learn.microsoft.com/en-us/azure/virtual-network/how-to-virtual-machine-mtu?tabs=linux) state that larger MTU is supported for **intra-VNet traffic**:
+
+| NIC Type | Documented Max MTU | Notes |
+|----------|-------------------|-------|
+| Mellanox ConnectX-3/4/5 | 3900 | Current AKS hardware |
+| MANA (Microsoft Azure Network Adapter) | 9000 (Preview) | Newer Azure NIC — full jumbo frames |
+
+> **Important**: Larger MTU only works for traffic within the same VNet or directly peered VNets in the same region. Traffic through gateways, global peerings, or to the internet is capped at 1500.
+
+### Test Setup
+
+- **Source**: branch-vm-v6 (Standard_D4s_v5, Mellanox ConnectX-5 VF, same VNet as AKS)
+- **Destination**: AKS dpdkpool node (`10.224.0.5`)
+- **Method**: `ping -s <size> -M do` (Don't Fragment flag set)
+- MTU increased on **both sides** to 9000 via `echo 9000 > /sys/class/net/eth0/mtu`
+
+### Test Results
+
+**Step 1: Default MTU 1500 (baseline)**
+
+| Payload | Total Frame | Result |
+|---------|-------------|--------|
+| 1472 | 1500 | PASS |
+| 1480 | 1508 | FAIL |
+
+**Step 2: MTU 3900 set on both sides**
+
+| Payload | Total Frame | Result |
+|---------|-------------|--------|
+| 1472 | 1500 | PASS |
+| 2000 | 2028 | PASS |
+| 2500 | 2528 | PASS |
+| 3000 | 3028 | PASS |
+| 3500 | 3528 | PASS |
+| 3800 | 3828 | PASS |
+| 3872 | 3900 | PASS |
+
+**Step 3: MTU 9000 set on both sides (finding exact ceiling)**
+
+| Payload | Total Frame | Result |
+|---------|-------------|--------|
+| 3872 | 3900 | PASS |
+| 3900 | 3928 | PASS |
+| 3950 | 3978 | PASS |
+| 4000 | **4028** | **PASS** ← max |
+| 4010 | 4038 | FAIL |
+| 4050 | 4078 | FAIL |
+| 5000+ | - | LOCAL MTU BLOCK |
+
+**IPv6 large frames (MTU 3900 both sides)**
+
+| Payload | Result |
+|---------|--------|
+| 1452 | PASS |
+| 2000 | PASS |
+| 3000 | PASS |
+| 3800 | PASS |
+| 3852 | PASS |
+
+### Conclusion
+
+Azure's Hyper-V SDN enforces a **hard limit of ~4028 bytes** for Mellanox ConnectX-5 VFs, regardless of the MTU set on the Linux interface. Even when the NIC driver accepts MTU 9000, Azure's virtual switch silently drops frames larger than ~4028 bytes.
+
+### Impact on SASE Architecture
+
+| MTU Config | VXLAN Overhead | SRv6 Overhead | Effective Customer Payload |
+|-----------|---------------|---------------|--------------------------|
+| Default 1500 | 50 bytes | 64 bytes | **1386 bytes** |
+| **Mellanox 4028** | 50 bytes | 64 bytes | **3914 bytes** |
+| MANA 9000 (untested) | 50 bytes | 64 bytes | **8886 bytes** |
+
+With MTU 4028, standard 1500-byte customer frames pass through VXLAN+SRv6 **with 2500+ bytes of headroom** — no fragmentation needed. This is sufficient for all standard SD-WAN/SASE customer traffic.
+
+### How to Enable
+
+```bash
+# On branch-vm (or any VM in the same VNet):
+echo 3900 | sudo tee /sys/class/net/eth0/mtu
+
+# On AKS node (via hostNetwork debug pod or DaemonSet):
+echo 3900 > /sys/class/net/eth0/mtu
+
+# Note: Changes don't persist across reboots — use cloud-init or DaemonSet for persistence
+```
+
 ### Critical Rules
 1. **Port 8472** for VXLAN — never 4789
 2. **Match VPP MAC** to Linux interface MAC
