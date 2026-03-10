@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: vfio-enabler
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      name: vfio-enabler
+  template:
+    metadata:
+      labels:
+        name: vfio-enabler
+    spec:
+      hostNetwork: true
+      hostPID: true
+      containers:
+      - name: enabler
+        image: alpine:latest
+        securityContext:
+          privileged: true
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            apk add pciutils kmod &&
+            chroot /host modprobe vfio-pci &&
+            echo "modprobe complete. Scanning for 15b3:101a..." &&
+            PCI_ADDR=$(lspci -nnD | grep "15b3:101a" | awk '{print $1}') &&
+            if [ -n "$PCI_ADDR" ]; then
+              echo "Found Mellanox VF at $PCI_ADDR. Unbinding from mlx5_core..."
+              if [ -e /sys/bus/pci/devices/$PCI_ADDR/driver/unbind ]; then
+                echo $PCI_ADDR > /sys/bus/pci/devices/$PCI_ADDR/driver/unbind
+              fi
+              echo "Binding to vfio-pci..."
+              echo "15b3 101a" > /sys/bus/pci/drivers/vfio-pci/new_id
+              echo "Setup complete. Keeping pod alive."
+            else
+              echo "No Mellanox VF found."
+            fi
+            sleep infinity
+        volumeMounts:
+        - name: sys
+          mountPath: /sys
+        - name: dev
+          mountPath: /dev
+        - name: host
+          mountPath: /host
+      volumes:
+      - name: sys
+        hostPath:
+          path: /sys
+      - name: dev
+        hostPath:
+          path: /dev
+      - name: host
+        hostPath:
+          path: /
