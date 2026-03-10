@@ -407,16 +407,85 @@ kubectl get pods
 
 ---
 
-### Phase 5: Setting up VPP & DPDK (Configuring the Router)
-1. Delete the Dummy Pod.
-2. Deploy the Open-Source VPP Pod. You will need to request `Hugepages` for memory in the Pod Spec (`resources.requests.memory`).
-3. Exec into the VPP Pod and use the VPP CLI (`vppctl`). Use it to bind the `eth1` interface to DPDK. 
-4. Configure two basic VRFs (VRF A and VRF B) in VPP. Map incoming traffic to these VRFs based on the source branch.
+## Phase 5: Troubleshooting Azure SR-IOV Synthetic Overlays & VFIO-PCI
 
-### Phase 5: Validating End-to-End Overlap Isolation (Pod A & Pod B)
-1. Deploy `Pod A` and `Pod B` inside the AKS cluster. 
-2. Use Multus or standard Linux `ip link` commands to create a `veth` pair linking `Pod A` to VPP's VRF A, and `Pod B` to VPP's VRF B. 
-3. Assign the exact same IP address (e.g., `10.0.0.5`) to both Pod A and Pod B.
-4. **The Ultimate Test:** Ping `10.0.0.5` from the Customer A Branch VM. You will receive a reply from Pod A. Ping `10.0.0.5` from the Customer B Branch VM. You will receive a reply from Pod B. The identical IPs completely bypass one another!
+When deploying an SR-IOV interface directly via standard Multus `host-device` CNI on Azure, you will likely hit a famous cloud constraint: the Kubelet complains it cannot move the link into the Pod's namespace (`FailedCreatePodSandBox... Link not found`).
+
+**Why does this happen?**
+Azure VMs utilize an accelerated networking architecture where the physical VF (e.g., Mellanox ConnectX-5) is transparently paired with a synthetic Hyper-V interface (`hv_netvsc`). This overlay design provides transparent failover when the VM moves hosts physically.
+
+If Kubernetes' generic `host-device` CNI arbitrarily attempts to yank the explicit physical VF out of the host namespace and shove it into a Pod, Azure's master network watcher freaks out and blockades the operation, resulting in an obscure link error.
+
+### How to Bypass This Constraint for VPP/DPDK:
+
+To properly bind the network card to the VPP Pod in Azure, standard CNI logic must optionally pivot to **VFIO-PCI binding mode**.
+Instead of sending a Linux network interface into the Pod, we sever the Linux network driver completely, unbind the device from the kernel, lock it manually to the generic `vfio-pci` kernel module, and then pass the literal RAW `/dev/vfio/` character device file to the container.
+
+**The DPDK/VFIO Setup Workflow:**
+
+**1. Isolate the PCI Address on the Node:**
+First, find exactly where the Azure physical VF lives:
+```bash
+# Deployed from your debug pod
+lspci -nn | grep -i Eth
+```
+*(Example: `4556:00:02.0 Ethernet controller [0200]: Mellanox Technologies MT27800 Family [ConnectX-5 Virtual Function] [15b3:101a]`)*
+
+**2. Load the VFIO-PCI Module (Host Node):**
+You must ensure the underlying AKS nodes have the `vfio` and `vfio-pci` modules enabled. Because AKS runs stripped-down Mariners/Ubuntu, we sometimes inject this manually using an init container.
+```bash
+modprobe vfio
+modprobe vfio-pci
+```
+
+**3. Unbind the Mellanox Driver and Bind VFIO (Host Node):**
+We literally disconnect the physical VF from its Azure `mlx5_core` network driver, turning it "off" from Linux's perspective, and link it strictly to the bypass driver.
+```bash
+# Unbind from existing linux driver
+echo "4556:00:02.0" > /sys/bus/pci/devices/0000:4556:00:02.0/driver/unbind
+
+# Override and bind to VFIO-PCI
+echo "15b3 101a" > /sys/bus/pci/drivers/vfio-pci/new_id
+```
+
+**4. Pass the Hardware Group via Container Manifest:**
+The Pod no longer asks for an IP interface. Instead, it asks for the literal `/dev/vfio/XX` device block that was just generated!
+
+---
+
+## Phase 6: Configuring VPP (The Data Plane)
+
+Once VPP boots safely inside an execution environment with access to `/dev/vfio` and mapped `Hugepages` memory, you configure the router using `vppctl`.
+
+**1. Binding the Device inside VPP:**
+You configure the `/etc/vpp/startup.conf` to consume the raw PCI address you uncoupled earlier:
+```ini
+dpdk {
+  dev 4556:00:02.0 {
+    name eth1
+  }
+}
+```
+
+**2. Initializing Overlapping VRFs (Customer Isolation):**
+VPP uses command-line configurations to create entirely distinct routing tables (VRFs), ensuring that even identical IP mappings never overlap dynamically.
+
+```bash
+# Inside the VPP pod terminal:
+vppctl
+
+# 1. Create two new isolated routing tables (Table 10 and Table 20)
+vpp# ip table add 10
+vpp# ip table add 20
+
+# 2. Assign overlapping IPs natively into different Tables
+vpp# set interface ip address GigabitEthernet0/2/0 10.0.0.5/24
+vpp# set interface ip table GigabitEthernet0/2/0 10
+
+vpp# set interface ip address GigabitEthernet0/3/0 10.0.0.5/24
+vpp# set interface ip table GigabitEthernet0/3/0 20
+```
+
+*This simple test validates the core SASE premise: Traffic from two distinct Edge branches can land on identical IP subnets and be seamlessly separated in memory without colliding!*
 
 *⚠️ **Cost Warning:** Running Azure vWAN Hubs and DPDK-capable D-series nodes costs significant Azure credits. Destroy the infrastructure (`terraform destroy` or Azure Resource Group deletion) when you finish an educational session.*
