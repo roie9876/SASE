@@ -91,60 +91,66 @@ By building this lab, you will learn how to:
 
 ```mermaid
 graph TD
-    classDef branch fill:#fff9c4,stroke:#333,stroke-width:2px,color:#000
+    classDef branchA fill:#e3f2fd,stroke:#1565c0,stroke-width:2px,color:#000
+    classDef branchB fill:#fce4ec,stroke:#c62828,stroke-width:2px,color:#000
     classDef azure fill:#bbdefb,stroke:#333,stroke-width:2px,color:#000
     classDef aks fill:#c8e6c9,stroke:#333,stroke-width:2px,color:#000
     classDef pod fill:#ffcc80,stroke:#333,stroke-width:2px,color:#000
-    classDef app fill:#e1bee7,stroke:#333,stroke-width:2px,color:#000
-    classDef srv6 fill:#ffcdd2,stroke:#c62828,stroke-width:2px,color:#000
+    classDef custA fill:#bbdefb,stroke:#1565c0,stroke-width:3px,color:#000
+    classDef custB fill:#ffcdd2,stroke:#c62828,stroke-width:3px,color:#000
     classDef tunnel fill:#e0e0e0,stroke:#616161,stroke-width:2px,color:#000
 
-    subgraph branches ["Simulated Branches (Same VNet)"]
-        B1["Branch VM (Customer A)<br/>eth0: 10.110.2.4<br/>vxlan100: 10.50.0.2 + fc00::2"]:::branch
-        B1_ENC["Linux SRv6 Encap<br/>10.20.0.0/16 → seg6 encap<br/>SID: fc00::a:1:e004"]:::srv6
+    subgraph branches ["Simulated SD-WAN Branches"]
+        B1["🔵 Branch VM - Customer A<br/>eth0: 10.110.2.4<br/>vxlan100: 10.50.0.2 + fc00::2"]:::branchA
+        B1_ENC["🔵 SRv6 Encap (Customer A)<br/>10.0.0.0/24 → seg6 encap<br/>SID: fc00::a:1:e004"]:::custA
+
+        B2["🔴 Branch VM - Customer B<br/>eth0: 10.110.3.4<br/>vxlan200: 10.50.0.6 + fc00::3"]:::branchB
+        B2_ENC["🔴 SRv6 Encap (Customer B)<br/>10.0.0.0/24 → seg6 encap<br/>SID: fc00::b:1:e004"]:::custB
+
         B1 --> B1_ENC
+        B2 --> B2_ENC
     end
 
-    subgraph tunnel_layer ["VXLAN Overlay (UDP:8472)"]
-        VXLAN_TUN["VXLAN VNI 100<br/>Outer: 10.110.2.4 → Pod IP<br/>Inner: IPv6 + SRH<br/>Port 8472 (NOT 4789!)"]:::tunnel
-        B1_ENC -->|"SRv6 inside VXLAN"| VXLAN_TUN
+    subgraph tunnel_layer ["VXLAN Overlay Tunnels (UDP:8472)"]
+        VXLAN_A["🔵 VXLAN VNI 100<br/>Inner: IPv6+SRH<br/>SID fc00::a:1:e004"]:::custA
+        VXLAN_B["🔴 VXLAN VNI 200<br/>Inner: IPv6+SRH<br/>SID fc00::b:1:e004"]:::custB
+        B1_ENC -->|"Customer A traffic"| VXLAN_A
+        B2_ENC -->|"Customer B traffic"| VXLAN_B
     end
 
     subgraph akshub ["AKS SASE Hub (Sweden Central)"]
         subgraph workernode ["AKS Node: aks-dpdkpool (Standard_D4s_v5)"]
             
             subgraph vpppod ["vpp-sriov Pod (privileged + HugePages + Multus)"]
-                LINUX_VXLAN["Linux vxlan100<br/>(decaps VXLAN outer)<br/>No Linux IP assigned"]:::aks
-                AFPACKET["VPP af-packet<br/>host-vxlan100<br/>IPv4: 10.50.0.1/30<br/>IPv6: fc00::1/64"]:::pod
+                LINUX_VXLAN["Linux VXLAN decap<br/>(strips outer UDP:8472)<br/>af-packet → VPP"]:::aks
+                AFPACKET["VPP host-vxlan100<br/>IPv4: 10.50.0.1/30<br/>IPv6: fc00::1/64"]:::pod
 
-                subgraph srv6_engine ["VPP SRv6 Engine"]
-                    SRV6_TABLE["SRv6 LocalSID Table"]:::srv6
-                    SID_A["fc00::a:1:e004<br/>→ End.DT4 table 0<br/>(Customer A)"]:::srv6
-                    SID_B["fc00::b:1:e004<br/>→ End.DT4 table 2<br/>(Customer B)"]:::srv6
-                    SRV6_TABLE --- SID_A
-                    SRV6_TABLE --- SID_B
+                subgraph srv6_engine ["VPP SRv6 Engine (LocalSID Table)"]
+                    SID_A["🔵 fc00::a:1:e004<br/>End.DT4 → FIB table 0<br/>Customer A VRF"]:::custA
+                    SID_B["🔴 fc00::b:1:e004<br/>End.DT4 → FIB table 2<br/>Customer B VRF"]:::custB
                 end
 
-                VPP_LAN["VPP host-net1<br/>10.20.0.254/16<br/>(LAN Gateway)"]:::pod
-                VPP_WAN["VPP host-net2<br/>10.30.0.254/16<br/>(WAN Gateway)"]:::pod
+                VPP_LAN["VPP host-net1<br/>10.20.0.254/16<br/>(Macvlan Gateway)"]:::pod
 
                 LINUX_VXLAN --> AFPACKET
-                AFPACKET --> SRV6_TABLE
-                SID_A -->|"Decap SRv6 → IPv4 FIB 0"| VPP_LAN
-                SID_B -->|"Decap SRv6 → IPv4 FIB 2"| VPP_LAN
+                AFPACKET --> SID_A
+                AFPACKET --> SID_B
+                SID_A -->|"🔵 Decap → IPv4 table 0"| VPP_LAN
+                SID_B -->|"🔴 Decap → IPv4 table 2"| VPP_LAN
             end
 
-            subgraph client_pods ["Customer Service Pods"]
-                PODA["client-pod (Customer A)<br/>net1: 10.20.1.24/16<br/>iperf3 server"]:::app
-                PODB["customer-b-pod<br/>net1: 10.20.1.30/16<br/>(Same IP range!)"]:::app
+            subgraph client_pods ["Customer Service Pods (Same Node, Same IPs!)"]
+                PODA["🔵 Customer A Pod<br/>net1: 10.0.0.5/24<br/>VRF 0"]:::custA
+                PODB["🔴 Customer B Pod<br/>net1: 10.0.0.5/24<br/>VRF 2 (same IP!)"]:::custB
             end
 
-            VPP_LAN -->|"macvlan L2 (same node)"| PODA
-            VPP_LAN -.->|"VRF 2 → macvlan"| PODB
+            VPP_LAN -->|"🔵 macvlan L2"| PODA
+            VPP_LAN -.->|"🔴 macvlan L2"| PODB
         end
     end
 
-    VXLAN_TUN -->|"Azure SDN routes<br/>outer IPv4 packet"| LINUX_VXLAN
+    VXLAN_A -->|"Azure SDN routes<br/>outer IPv4"| LINUX_VXLAN
+    VXLAN_B -->|"Azure SDN routes<br/>outer IPv4"| LINUX_VXLAN
 ```
 
 ---
