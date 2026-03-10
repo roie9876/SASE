@@ -269,7 +269,17 @@ vppctl set interface state host-net2 up
 
 ### Validation
 
-Execute into VPP and print the bounded network hardware. You will see both `host-net1` and `host-net2` securely mapped inside the VPP data engine, providing discrete pipelines matching the underlying high-performance hardware!
+Wait! Before verifying the VPP software interfaces, we can confirm the pod's underlying visibility into the physical host's PCI bus. Because we deployed the pod with elevated privileges, it sees the actual Mellanox hardware injected via Azure's Accelerated Networking:
+
+```bash
+kubectl exec -it vpp-sriov -- lspci -nn | grep -i mellanox
+```
+*Output expected:*
+```
+126f:00:02.0 Ethernet controller [0200]: Mellanox Technologies MT27800 Family [ConnectX-5 Virtual Function] [15b3:1018] (rev 80)
+```
+
+Now, execute into VPP and print the bounded network hardware. You will see both `host-net1` and `host-net2` securely mapped inside the VPP data engine, providing discrete pipelines identically matching the underlying high-performance hardware!
 
 ```bash
 vppctl show interface
