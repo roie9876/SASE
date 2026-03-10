@@ -97,14 +97,15 @@ Instead of using proprietary gateways, we map open-source and Azure-native compo
 
 ---
 
-## 🚀 Step-by-Step Deployment Guide
+## 🚀 Step-by-Step Deployment Guide (Multi-NIC via Multus MACVLAN)
 
-Deploying VPP/DPDK on standard Azure VMs without re-provisioning specialized node pools normally triggers crashes during the Environment Abstraction Layer (EAL) initialization (`rte_eal_init returned -1`).
-This guide implements a manual "Mellanox Override" bypassing the Azure/Kubernetes limits natively.
+Due to Azure's physical constraints on DPDK and SR-IOV bindings (specifically limitations around bifurcated Mellanox interfaces and namespace reassignment), our architecture logically divides the high-speed Accelerated Networking NIC into multiple dedicated interfaces. We achieve this using **Multus CNI** and **MACVLAN**. 
+
+This allows us to seamlessly match the customer SASE architecture diagram—delivering distinct `lan` and `wan` physical data-plane connections into a single VPP processing engine within the cloud.
 
 ### Step 1: Bootstrap the Application Infrastructure (AKS)
 
-Deploy an AKS Cluster utilizing **Azure CNI Powered by Cilium** to reduce latency and create your application Node Pool.
+Deploy an AKS Cluster utilizing **Azure CNI Powered by Cilium**. Create a compute Node Pool capable of Accelerated Networking.
 
 ```bash
 # 1. Ensure you have a Virtual Network and Subnet created
@@ -128,7 +129,7 @@ az aks create \
     --vnet-subnet-id $SUBNET_ID \
     --generate-ssh-keys 
 
-# 3. Add the Data Plane Worker Pool (Accelerated Networking is auto-enabled on D4s_v5)
+# 3. Add the Data Plane Worker Pool (Accelerated Networking is auto-enabled)
 az aks nodepool add \
     --resource-group $RESOURCE_GROUP \
     --cluster-name $CLUSTER_NAME \
@@ -142,95 +143,137 @@ az aks get-credentials -g $RESOURCE_GROUP -n $CLUSTER_NAME --admin
 
 ---
 
-### Step 2: Inject Hardware Realities into the Worker Node
-
-Standard AKS dynamically configures `hugepages-2048kB` to `0` at runtime. We must inject memory blocks directly into the VM's bare-metal SYSFS boundary using an ephemeral K8s shell.
-
-```bash
-# 1. Find your DPDK pool node name
-NODE_NAME=$(kubectl get nodes -l agentpool=dpdkpool -o jsonpath='{.items[0].metadata.name}')
-
-# 2. Inject 2GB of Hugepages directly onto the Physical OS using Chroot
-kubectl debug node/$NODE_NAME -it --image=ubuntu -- chroot /host bash -c 'echo 1024 > /sys/devices/system/node/node0/hugepages/hugepages-2048kB/nr_hugepages && cat /proc/meminfo | grep Huge'
-```
-*Expected Output: `HugePages_Total: 1024`*
-
----
-
-### Step 3: Deploy the Cloud-Native NVA
-
-Standard DPDK manuals typically instruct binding to `uio_pci_generic` or `vfio-pci`. 
-**However, Azure relies strictly on Mellanox ConnectX cards.**
-Mellanox PMDs (Poll Mode Drivers) DO NOT use UIO or VFIO bindings! They use the native Linux `mlx5_core` driver alongside user-space **RDMA Core/IBVerbs**. Because of this, our manifest mounts `/dev/infiniband`.
+### Step 2: Ensure HugePages are Provisioned Natively
+Standard AKS dynamicaly provisions compute, but does not allocate HugePages out of the box. We apply a DaemonSet to automatically mount 2Gi Hugepages across the node pool for high-performance packet buffers.
 
 ```bash
-# Edit the deployment file to match your node name (vpp-dpdk-pod.yaml)
-sed -i "s/kubernetes.io\/hostname:.*/kubernetes.io\/hostname: $NODE_NAME/" vpp-dpdk-pod.yaml
-
-kubectl apply -f vpp-dpdk-pod.yaml
-kubectl wait --for=condition=Ready pod/vpp-router --timeout=30s
+kubectl apply -f setup-hugepages.yaml
 ```
 
 ---
 
-### Step 4: Neutralize Kubernetes Container Overlords (`cgroups v2`)
-
-Kubelet restricts physical memory mappings via `cgroups v2`, freezing container `mmap` executions.
-Run the instruction below from the live cluster to grant the Pod maximum memory boundaries.
+### Step 3: Install Multus and Create Multi-NIC Networks
+We must install Multus CNI to bypass standard Kubernetes limitation of a single network interface per pod. Then we define our "LAN" and "WAN" networks bound logically to the parent `eth0` interface using the `macvlan` plugin.
 
 ```bash
-# Set cgroups max limit to 'max' dynamically
-kubectl exec vpp-router -- bash -c "echo max > /sys/fs/cgroup\$(cat /proc/1/cgroup | cut -d: -f3)/hugetlb.2MB.max"
+# Install Multus CNI
+kubectl apply -f https://raw.githubusercontent.com/k8snetworkplumbingwg/multus-cni/master/deployments/multus-daemonset.yml
+
+# Wait for Multus DaemonSet to run
+kubectl rollout status daemonset/kube-multus-ds -n kube-system
+
+# Apply the logical Multus Network Attachments
+kubectl apply -f multi-net.yaml
+```
+
+*Example `multi-net.yaml`:*
+```yaml
+apiVersion: "k8s.cni.cncf.io/v1"
+kind: NetworkAttachmentDefinition
+metadata:
+  name: sriov-lan
+spec:
+  config: '{
+    "cniVersion": "0.3.1",
+    "type": "macvlan",
+    "master": "eth0",
+    "mode": "bridge",
+    "ipam": {
+      "type": "host-local",
+      "subnet": "10.20.0.0/16",
+      "rangeStart": "10.20.0.100",
+      "rangeEnd": "10.20.0.200",
+      "routes": [
+        { "dst": "10.20.0.0/16" }
+      ],
+      "gateway": "10.20.0.1"
+    }
+  }'
+---
+apiVersion: "k8s.cni.cncf.io/v1"
+kind: NetworkAttachmentDefinition
+metadata:
+  name: sriov-wan
+spec:
+  config: '{
+    "cniVersion": "0.3.1",
+    "type": "macvlan",
+    "master": "eth0",
+    "mode": "bridge",
+    "ipam": {
+      "type": "host-local",
+      "subnet": "10.30.0.0/16",
+      "rangeStart": "10.30.0.100",
+      "rangeEnd": "10.30.0.200",
+      "routes": [
+        { "dst": "10.30.0.0/16" }
+      ],
+      "gateway": "10.30.0.1"
+    }
+  }'
 ```
 
 ---
 
-### Step 5: Install DPDK Subsystems (Mellanox Override)
-
-Install the user-space OFED drivers (`rdma-core`/`ibverbs`) and VPP alongside its DPDK plugins directly spanning to the physical interfaces.
+### Step 4: Deploy the Cloud-Native NVA (VPP Pod)
+We deploy standard VPP configured to use the host `macvlan` interfaces via `k8s.v1.cni.cncf.io/networks`. Notice how we inject HugePages from the DaemonSet allocation.
 
 ```bash
-kubectl exec vpp-router -- bash -c "
-apt-get update && \
-apt-get install -y curl gnupg2 lsb-release ibverbs-providers rdma-core && \
-curl -s https://packagecloud.io/install/repositories/fdio/release/script.deb.sh | bash && \
-apt-get install -y vpp vpp-plugin-core vpp-plugin-dpdk pciutils
-"
+kubectl apply -f vpp-sriov.yaml
+kubectl wait --for=condition=Ready pod/vpp-sriov --timeout=30s
+```
+
+*Example `vpp-sriov.yaml` Snippet:*
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: vpp-sriov
+  annotations:
+    k8s.v1.cni.cncf.io/networks: sriov-lan, sriov-wan
+spec:
+  containers:
+  - name: vpp
+    image: ligato/vpp-base:latest
+    securityContext:
+      privileged: true
+    volumeMounts:
+    - mountPath: /dev/hugepages
+      name: hugepage
+  volumes:
+  - name: hugepage
+    emptyDir:
+      medium: HugePages
 ```
 
 ---
 
-### Step 6: Map the Bootloader and Run the Data Path
-
-Configure the `startup.conf` specifying the exact DBDF mapping (Domain:Bus:Device.Function).
-*Note: Run `lspci -nn` inside the pod to find your Mellanox interface's mapping (usually `0000:xx:02.0`). Let's assume `b1fd:00:02.0` in this example.*
+### Step 5: Bind the AF_PACKET Architecture in VPP
+Because DPDK's bifurcated Mellanox drivers reject namespace separation in the cloud, we bind to the host-injected macOS/Linux interfaces as highly efficient `AF_PACKET` data planes. 
 
 ```bash
-kubectl exec vpp-router -- bash -c "mkdir -p /etc/vpp && cat << 'EOF' > /etc/vpp/startup.conf
-unix {
-  nodaemon
-  log /var/log/vpp/vpp.log
-  full-coredump
-  cli-listen /run/vpp/cli.sock
-}
-api-trace { on }
-api-segment { gid root }
-dpdk {
-  dev b1fd:00:02.0
-  log-level debug
-}
-EOF"
-```
+# Exec into the Pod
+kubectl exec -it vpp-sriov -- bash
 
-Finally, launch the VPP Engine while bypassing the POSIX `RLIMIT_MEMLOCK` restriction via `ulimit`:
-```bash
-kubectl exec vpp-router -- bash -c "ulimit -l unlimited && vpp -c /etc/vpp/startup.conf > /var/log/vpp.out 2>&1 &"
+# Stop initial VPP process and re-launch with custom DPDK / Unix Socket bounds if needed, then:
+vppctl create host-interface name net1
+vppctl set interface state host-net1 up
+
+vppctl create host-interface name net2
+vppctl set interface state host-net2 up
 ```
 
 ### Validation
 
-Execute into VPP and print the bounded network hardware. You will successfully see your Azure Mellanox NIC bonded to the VPP Data Engine via the RDMA DPDK plugin, entirely bypassing the Linux Host's native core network stack.
+Execute into VPP and print the bounded network hardware. You will see both `host-net1` and `host-net2` securely mapped inside the VPP data engine, providing discrete pipelines matching the underlying high-performance hardware!
 
 ```bash
-kubectl exec vpp-router -- vppctl show hardware-interfaces
+vppctl show interface
+```
+*Output expected:*
+```
+              Name               Idx    State  MTU (L3/IP4/IP6/MPLS)     Counter          Count     
+host-net1                         1      up          9000/0/0/0     
+host-net2                         2      up          9000/0/0/0     
+local0                            0     down          0/0/0/0    
 ```
