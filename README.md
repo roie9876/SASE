@@ -920,3 +920,5 @@ This requires highly advanced container networking capabilities, including **Mul
 👉 **[Read the Full Check Point AKS Architecture & Diagrams Here](./checkpoint_aks_sase.md)**
 
 👉 **[Read the Azure vWAN Global Scale & Limits Breakdown Here](./azure_vwan_scale.md)**
+
+👉 **[Read the DPDK Mellanox & Hugepages AKS Hack Guide Here](./dpdk_aks_mellanox_override.md)**
