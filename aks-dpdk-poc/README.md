@@ -1,5 +1,7 @@
 # SASE & Telco K8s Networking: Educational POC
 
+> **[OPERATIONS GUIDE](OPERATIONS_GUIDE.md)** — Complete setup, recovery, troubleshooting, and lessons learned from running VPP + VXLAN on AKS. Covers all fragile points (port 4789 conflict, MAC mismatch, checksum issues), step-by-step deployment, iperf3 testing, and af-packet vs DPDK comparison.
+
 This guide outlines a **100% Open-Source and Azure-Native Proof of Concept (POC)** designed to teach the mechanics of High-Performance Kubernetes Networking (SR-IOV, DPDK, and Kernel Bypass) without requiring commercial licenses like Check Point's SASE software.
 
 By building this lab, you will learn how to:

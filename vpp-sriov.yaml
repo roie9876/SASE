@@ -1,0 +1,40 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: vpp-sriov
+  annotations:
+    k8s.v1.cni.cncf.io/networks: sriov-lan, sriov-wan
+spec:
+  nodeName: aks-dpdkpool-11331723-vmss000000
+  containers:
+  - name: vpp
+    image: ubuntu:22.04
+    command: ["/bin/sleep", "infinity"]
+    securityContext:
+      privileged: true
+    resources:
+      requests:
+        intel.com/mellanox_sriov: '1'
+        hugepages-2Mi: 1Gi
+        memory: 1Gi
+      limits:
+        intel.com/mellanox_sriov: '1'
+        hugepages-2Mi: 1Gi
+        memory: 1Gi
+    volumeMounts:
+    - mountPath: /dev/hugepages
+      name: hugepage
+    - mountPath: /dev/vfio
+      name: vfio
+    - mountPath: /dev/infiniband
+      name: infiniband
+  volumes:
+  - name: hugepage
+    emptyDir:
+      medium: HugePages
+  - name: vfio
+    hostPath:
+      path: /dev/vfio
+  - name: infiniband
+    hostPath:
+      path: /dev/infiniband
