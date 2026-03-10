@@ -862,26 +862,88 @@ UDP works because UDP checksum is optional in IPv4.
 | **Packet path** | NIC → Kernel → Copy → VPP → Copy → Kernel → NIC | NIC → DMA → VPP → DMA → NIC |
 | **Copies** | 2 per packet | 0 (zero-copy) |
 | **Throughput** | ~2-5 Gbps | ~10-40 Gbps |
-| **TCP checksums** | Broken | Works (VPP computes them) |
+| **TCP checksums** | Broken (kernel offload conflict) | Works (VPP computes in software) |
 | **Requires** | Nothing special | HugePages, IOMMU, VFIO |
 
-**Why DPDK doesn't work on AKS today**:
-1. No IOMMU on AKS nodes (VFIO-PCI binding fails)
-2. Mellanox bifurcated driver requires `mlx5_core` in kernel — unbinding kills pod eth0
-3. No `sriov-network-device-plugin` on AKS for dedicated DPDK VFs
-4. Zero Microsoft documentation on any of these topics
+### DPDK Blocker #1: No IOMMU on AKS Nodes
+
+**What we tried**: Bind the Mellanox ConnectX-5 SR-IOV Virtual Function (PCI `b1fd:00:02.0`, vendor `15b3:101a`) to the `vfio-pci` driver inside a privileged AKS pod.
+
+**What happened**: VFIO-PCI requires IOMMU (Intel VT-d) to create device groups under `/dev/vfio/`. AKS nodes boot with `intel_iommu=off` — there is no AKS API, `--linux-os-config` parameter, or feature flag to enable it.
+
+**Specific test results**:
+- `ls /dev/vfio/` → only `/dev/vfio/vfio` exists (control device), no numbered group files
+- Enabled `enable_unsafe_noiommu_mode=1` → still no device group files created
+- Attempted `echo "b1fd:00:02.0" > /sys/bus/pci/drivers/vfio-pci/bind` → fails silently, device stays on `mlx5_core`
+
+**Impact**: Without IOMMU, DPDK cannot use its preferred `vfio-pci` driver. This is the primary NIC passthrough mechanism for all modern DPDK deployments. No workaround exists on AKS.
+
+### DPDK Blocker #2: UIO Driver Binds But DPDK PMD Fails to Initialize
+
+**What we tried**: As a fallback, we loaded `uio_pci_generic` (a simpler, less-secure alternative to VFIO) and bound the Mellanox VF to it.
+
+**What happened**: The bind succeeded — `lspci -k` showed `uio_pci_generic` as the kernel driver. However, when VPP attempted to initialize the DPDK poll-mode driver (PMD) on the device, it failed to start. The Mellanox ConnectX-5 VF does not properly expose MSI-X interrupts through the UIO interrupt model.
+
+**Specific test results**:
+```
+# UIO bind succeeded:
+lspci -k -s b1fd:00:02.0
+→ Kernel driver in use: uio_pci_generic
+
+# But VPP DPDK PMD failed:
+vpp startup.conf: dpdk { uio-driver uio_pci_generic dev b1fd:00:02.0 }
+→ VPP starts but no DPDK interface appears in `show hardware-interfaces`
+```
+
+**Impact**: UIO is not a viable path for Mellanox VFs on Azure. The hardware's interrupt architecture is incompatible with UIO's polling model.
+
+### DPDK Blocker #3: Mellanox Bifurcated Driver Conflict
+
+**What we tried**: Mellanox's own DPDK PMD (`mlx5`) uses a "bifurcated" architecture — DPDK runs in userspace but requires `mlx5_core` to stay loaded in the kernel. On standalone Azure VMs, this works because you can dedicate a secondary NIC to DPDK while keeping the primary NIC for management.
+
+**What happened**: On AKS, the Mellanox VF IS the pod's primary network interface (`eth0`). The pod's CNI IP, default route, and Kubernetes API connectivity all depend on `mlx5_core` managing this VF. If we unbind `mlx5_core` to give DPDK exclusive access, the pod loses ALL network connectivity — including `kubectl exec`, health checks, and API server communication. The pod becomes unreachable and Kubernetes marks it as failed.
+
+**Impact**: There is no mechanism on AKS to request a second, dedicated SR-IOV VF for DPDK passthrough while keeping the first VF for CNI networking. A single VF cannot serve both the kernel network stack (for pod management) and DPDK (for data plane) simultaneously.
+
+### DPDK Blocker #4: No SR-IOV Network Device Plugin on AKS
+
+**What we need**: The Kubernetes `sriov-network-device-plugin` (from the Network Plumbing Working Group) discovers SR-IOV VFs on the host and makes them available as Kubernetes extended resources (e.g., `intel.com/sriov_netdevice`). This would allow a pod to request TWO VFs — one for CNI (kernel-managed) and one for DPDK passthrough.
+
+**What happened**: AKS does not ship the SR-IOV device plugin as an add-on or managed component. We attempted manual installation but the plugin requires host-level access to manage VF allocation, driver binding, and device enumeration — operations that conflict with AKS's managed node lifecycle.
+
+**Impact**: Without this plugin, there is no Kubernetes-native way to allocate dedicated SR-IOV VFs for DPDK. Every pod gets exactly one VF via Azure CNI, and that VF is permanently bound to the kernel network stack. This is the fundamental architectural gap preventing DPDK on AKS.
+
+### DPDK Blocker Summary
+
+| Blocker | Technical Root Cause | Could Microsoft Fix This? |
+|---------|---------------------|--------------------------|
+| No IOMMU | AKS kernel boots with `intel_iommu=off` | Yes — enable via boot params or `linuxOsConfig` |
+| UIO PMD failure | Mellanox VF MSI-X incompatible with UIO | No — hardware limitation |
+| Bifurcated driver conflict | Single VF shared between CNI and DPDK | Yes — provide second VF via device plugin |
+| No device plugin | `sriov-network-device-plugin` not available | Yes — ship as AKS add-on |
+
+**For comparison**: AWS EKS supports DPDK via the ENA driver with documented guides. GCP GKE supports DPDK via gVNIC. Azure AKS has zero documentation or support path for DPDK inside pods.
 
 ---
 
 ## Lessons Learned from Azure AKS
 
-### What Works
-- Azure CNI + Cilium dataplane
-- Macvlan via Multus on same-node pods
-- VXLAN tunnels between pods and VMs (any UDP port)
-- SRv6 encapsulation inside VXLAN tunnels
-- VPP SRv6 localsid processing (End.DT4)
-- IP Forwarding on VMSS NICs
+### What Works (Proven in This POC)
+
+| Capability | How We Tested | Result |
+|-----------|--------------|--------|
+| **Azure CNI + Cilium dataplane** | Created AKS cluster with `--network-plugin azure --network-dataplane cilium` | Pods get CNI IPs, Cilium handles policy and routing |
+| **Dual-stack AKS (IPv4+IPv6)** | Created cluster with `--ip-families ipv4,ipv6 --network-plugin-mode overlay` | Nodes and pods receive both IPv4 and IPv6 addresses |
+| **Macvlan via Multus on same-node pods** | Installed Multus, created macvlan NADs, pinned pods to same node | VPP and client-pod communicate via macvlan L2 with 0% loss |
+| **VXLAN tunnels (UDP:8472)** | Created Linux VXLAN between branch-vm and VPP pod | Tunnel works, all UDP ports pass through Azure SDN |
+| **SRv6 inside VXLAN** | Encapsulated IPv6+SRH inside VXLAN outer header | VPP `End.DT4` localsid processed 23+ packets correctly |
+| **VPP SRv6 multi-tenant VRF routing** | Configured `sr localsid` with per-customer SIDs mapping to VRF tables | Two customers (`fc00::a:1:e004` → table 0, `fc00::b:1:e004` → table 2) isolated |
+| **UDP iperf3 through full path** | `iperf3 -c 10.20.1.24 -t 5 -u -b 100M` | 100 Mbps, 0% packet loss, 0.338ms jitter |
+| **ICMP ping end-to-end** | `ping` from branch-vm through VXLAN → VPP → macvlan → client-pod | 4/4 received, 0% loss, ~10ms RTT |
+| **IP Forwarding on VMSS NICs** | Enabled via `az vmss nic list` — verified `enableIPForwarding: true` | Node NIC accepts packets not destined for its own IP |
+| **VPP af-packet mode** | `create host-interface name net1` on macvlan interfaces | VPP processes all packets via PACKET_MMAP raw sockets |
+| **VPP MAC matching for macvlan** | `set interface mac address host-net1 <linux-mac>` | Fixes ARP resolution between VPP and macvlan peers |
+| **HugePages via linuxOsConfig** | `--linux-os-config os-config.json` with `vmNrHugepages: 1024` | 2Mi HugePages allocated on dpdkpool node (IPv4 cluster) |
 
 ### What Does NOT Work
 - ❌ Azure UDR routing to pod macvlan overlay IPs
