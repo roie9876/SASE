@@ -889,6 +889,64 @@ UDP works because UDP checksum is optional in IPv4.
 - ❌ L2 macvlan between pods on different nodes
 - ❌ Modifying eth0 checksum offload (breaks Cilium)
 - ❌ VPP native VXLAN on port 4789 (conflicts with af-packet Linux VXLAN)
+- ❌ **Native SRv6 through Azure fabric** (Azure drops IPv6 Segment Routing Header — see test below)
+
+---
+
+## Native SRv6 Test: Azure Drops SRH Extension Headers
+
+### Test Setup
+We deployed a **dual-stack AKS cluster** (Azure CNI Overlay + Cilium, `--ip-families ipv4,ipv6`) in Sweden Central to test whether Azure's SDN fabric passes IPv6 packets with Segment Routing Header (SRH, Routing Header type 4) natively — without VXLAN encapsulation.
+
+| Resource | IPv4 | IPv6 |
+|----------|------|------|
+| AKS dpdkpool node | 10.224.0.5 | fd54:a10a:ded0:472e::5 |
+| branch-vm-v6 | 10.225.0.4 | fd54:a10a:ded0:1000::4 |
+
+### Test Method
+
+We used Python `scapy` on the branch-vm to send two types of IPv6 packets to the AKS node:
+
+**Test 1: Plain IPv6 ICMPv6 (no extension headers)**
+```bash
+ping6 -c 3 fd54:a10a:ded0:472e::5
+```
+**Result: 3/3 received, 0% loss** ✅
+
+**Test 2: IPv6 + SRH (Routing Header type 4)**
+```python
+from scapy.all import *
+pkt = IPv6(src="fd54:a10a:ded0:1000::4", dst="fd54:a10a:ded0:472e::5") / \
+      IPv6ExtHdrRouting(type=4, segleft=0, addresses=["fc00::a:1:e004"]) / \
+      ICMPv6EchoRequest(data=b"SRv6TEST")
+send(pkt, count=5)
+```
+**Result: 0/5 received, 100% loss** ❌
+
+We captured on the AKS node using a `hostNetwork: true` debug pod with `tcpdump -nni eth0 "ip6 proto 43"` — zero packets arrived.
+
+### Conclusion
+
+| Packet Type | Arrives at AKS Node? |
+|------------|---------------------|
+| Plain IPv6 (ICMPv6) | ✅ Yes — 0% loss |
+| IPv6 + SRH (Routing Header type 4) | ❌ No — 100% dropped by Azure |
+
+**Azure's Hyper-V virtual switch / SDN fabric silently drops IPv6 packets containing Segment Routing Header (IPv6 Extension Header type 43, routing type 4).** This is likely because SRH resembles IPv6 source routing, which many network security implementations block by default.
+
+### Implication for SASE Architecture
+
+Native SRv6 over the Azure fabric is **not possible**. The only viable path for SRv6 on AKS is:
+
+```
+SRv6 inside VXLAN (what works):
+  branch-vm → SRv6 encap → VXLAN (UDP:8472) → Azure SDN → VPP pod → VXLAN decap → SRv6 process
+
+Native SRv6 (what Azure blocks):
+  branch-vm → SRv6 packet → Azure SDN → ❌ DROPPED by Hyper-V
+```
+
+This finding should be raised with Microsoft — SRv6 is a critical technology for telco/ISP network slicing and SASE architectures.
 
 ### Critical Rules
 1. **Port 8472** for VXLAN — never 4789
