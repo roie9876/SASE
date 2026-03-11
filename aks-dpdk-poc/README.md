@@ -6,10 +6,11 @@ By building this lab, you will learn how to:
 1. Orchestrate Azure Virtual WAN to route traffic.
 2. Set up AKS with compute-optimized node pools capable of Accelerated Networking.
 3. Inject Hugepages bypassing Kubernetes natively.
-4. Run a Data Plane Development Kit (DPDK) workload using the open-source FD.io VPP router bound directly to a Mellanox ConnectX-5 PCI interface.
+4. Run a Data Plane Development Kit (DPDK) workload using the open-source FD.io VPP router bound directly to a **MANA (Microsoft Azure Network Adapter)** via the DPDK `net_mana` poll-mode driver.
 5. **Build a VXLAN overlay tunnel** from an external VM to a VPP pod inside AKS.
 6. **Configure SRv6 segment routing** for multi-tenant traffic isolation with overlapping IPs.
 7. **Forward traffic at 100 Mbps+ with 0% packet loss** through VPP's L3 routing engine.
+8. **Run DPDK testpmd on MANA** inside an AKS pod using Ubuntu 24.04, kernel 6.8, and Standard_D4s_v6.
 
 ### Table of Contents
 1. [Architecture Topology](#architecture-topology)
@@ -25,6 +26,9 @@ By building this lab, you will learn how to:
 11. [TCP Checksum Deep Dive](#tcp-checksum-issue-deep-dive)
 12. [af-packet vs DPDK](#af-packet-vs-dpdk-why-production-needs-dpdk)
 13. [Azure AKS Lessons Learned](#lessons-learned-from-azure-aks)
+14. [MANA DPDK on AKS: Breakthrough](#mana-dpdk-on-aks-breakthrough)
+15. [Native SRv6 Test](#native-srv6-test-azure-drops-srh-extension-headers)
+16. [MTU / Jumbo Frame Test](#mtu--jumbo-frame-test-azure-supports-up-to-4028-bytes)
 
 ---
 
@@ -952,11 +956,229 @@ vpp startup.conf: dpdk { uio-driver uio_pci_generic dev b1fd:00:02.0 }
 
 ### What Does NOT Work
 - ❌ Azure UDR routing to pod macvlan overlay IPs
-- ❌ DPDK on AKS (no IOMMU, no docs)
+- ❌ DPDK on AKS with **Ubuntu 22.04 / kernel 5.15** (backported `mana_ib` is broken — `ibv_reg_mr()` returns EPROTO)
+- ❌ DPDK on AKS with **AzureLinux / kernel 6.6** (`CONFIG_MANA_INFINIBAND` disabled in kernel config)
+- ❌ DPDK on AKS with **Mellanox ConnectX** (Azure blocks VF PCI passthrough from `mlx5_core` to `vfio-pci`)
+- ✅ **DPDK on AKS with Ubuntu 24.04 / kernel 6.8 + MANA — WORKS!** (see [MANA DPDK on AKS](#mana-dpdk-on-aks-breakthrough))
 - ❌ L2 macvlan between pods on different nodes
 - ❌ Modifying eth0 checksum offload (breaks Cilium)
 - ❌ VPP native VXLAN on port 4789 (conflicts with af-packet Linux VXLAN)
 - ❌ **Native SRv6 through Azure fabric** (Azure drops IPv6 Segment Routing Header — see test below)
+
+---
+
+## MANA DPDK on AKS: Breakthrough
+
+### TL;DR
+
+**DPDK with MANA works on AKS** when using the right combination:
+
+| Component | Required Value |
+|-----------|---------------|
+| **AKS OS SKU** | `--os-sku Ubuntu2404` (Ubuntu 24.04 LTS) |
+| **Kernel** | `6.8.0-1046-azure` (native `mana_ib` built-in) |
+| **VM Size** | `Standard_D4s_v6` or any v6-series (guaranteed MANA NIC) |
+| **DPDK Version** | v24.11 (built from source with `net_mana` PMD) |
+| **rdma-core** | v46+ (built from source for `libmana` provider) |
+| **NIC Setup** | Dual NIC: eth0 for K8s, eth1 for DPDK |
+
+### Why This Combination — And Why Others Fail
+
+Microsoft's [MANA DPDK documentation](https://learn.microsoft.com/en-us/azure/virtual-network/setup-dpdk-mana#dpdk-requirements-for-mana) lists 4 requirements:
+
+1. **Linux kernel Ethernet driver** (kernel 5.15+) — `mana.ko`
+2. **Linux kernel InfiniBand driver** (kernel 6.2+) — `mana_ib.ko`
+3. **DPDK MANA poll-mode driver** (DPDK 22.11+) — `net_mana`
+4. **Libmana user-space drivers** (rdma-core v44+) — `libmana-rdmav34.so`
+
+Requirement #2 is the critical one. We tested 3 OS + kernel combinations:
+
+| # | OS | Kernel | `mana_ib` Status | DPDK Result |
+|---|-----|--------|-----------------|-------------|
+| 1 | Ubuntu 22.04 | 5.15.0-1102-azure | Backported module, loads but **broken** | `ibv_reg_mr()` returns EPROTO (-71) |
+| 2 | AzureLinux 3.0 | 6.6.121.1-1.azl3 | `CONFIG_MANA_INFINIBAND` **disabled** in kernel config | Module doesn't exist |
+| 3 | **Ubuntu 24.04** | **6.8.0-1046-azure** | **Built-in, auto-loaded** | **DPDK port 0 probed, queues created, testpmd runs!** |
+
+### The MANA DPDK Architecture on AKS
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  AKS Node: Ubuntu 24.04, kernel 6.8, Standard_D4s_v6           │
+│                                                                 │
+│  eth0 (K8s mgmt)          eth1 (DPDK data plane)               │
+│    │                        │                                   │
+│    ├─ enP30832s1 (MANA VF)  ├─ enP30832s1d1 (MANA VF)         │
+│    │  MAC: 7c:1e:52:...     │  MAC: 60:45:bd:...               │
+│    │  driver: hv_netvsc     │  driver: uio_hv_generic (DPDK)   │
+│    │                        │                                   │
+│    │  PCI: 7870:00:00.0     │  PCI: 7870:00:00.0 (same device) │
+│    │  IB: mana_0/uverbs0    │  IB: manae_0/uverbs1             │
+│    │                        │                                   │
+│    └─ Cilium CNI (pods)     └─ DPDK net_mana PMD               │
+│                                  │                              │
+│                            ┌─────┴─────┐                       │
+│                            │ VPP / DPDK │                       │
+│                            │ user-space │                       │
+│                            └───────────┘                        │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Step-by-Step: Deploy MANA DPDK on AKS
+
+#### Step 1: Create AKS Cluster with Ubuntu 24.04
+
+```bash
+# Create dual-stack VNet
+az network vnet create -g sase-poc-lab-rg -n AKS-DualStack-VNet \
+  --address-prefixes 10.120.0.0/16 fd00:db8:deca::/48 \
+  --subnet-name default --subnet-prefixes 10.120.0.0/24 fd00:db8:deca:deed::/64
+
+# Create second subnet for DPDK NIC
+az network vnet subnet create -g sase-poc-lab-rg \
+  --vnet-name AKS-DualStack-VNet -n dpdk-subnet \
+  --address-prefixes 10.120.2.0/24 fd00:db8:0:2::/64
+
+# Create AKS with Ubuntu 24.04 + D4s_v6
+SUBNET_ID=$(az network vnet subnet show -g sase-poc-lab-rg \
+  --vnet-name AKS-DualStack-VNet -n dpdk-subnet --query id -o tsv)
+
+az aks create \
+  --resource-group sase-poc-lab-rg \
+  --name sase-ubuntu2404-aks \
+  --location swedencentral \
+  --node-count 1 \
+  --node-vm-size Standard_D4s_v6 \
+  --os-sku Ubuntu2404 \
+  --network-plugin azure \
+  --network-plugin-mode overlay \
+  --network-dataplane cilium \
+  --ip-families IPv4,IPv6 \
+  --pod-cidrs 10.246.0.0/16,fd57:fd45:5a09:3491::/64 \
+  --service-cidrs 10.2.0.0/16,fd57:a8f7:45f6:6149::/108 \
+  --dns-service-ip 10.2.0.10 \
+  --vnet-subnet-id $SUBNET_ID \
+  --generate-ssh-keys
+```
+
+#### Step 2: Add Second NIC to VMSS
+
+```bash
+# Find the VMSS
+RG="MC_sase-poc-lab-rg_sase-ubuntu2404-aks_swedencentral"
+VMSS=$(az vmss list -g $RG --query '[0].name' -o tsv)
+
+# Deallocate, add NIC, update, start
+az vmss deallocate -g $RG -n $VMSS --instance-ids 0
+az vmss update -g $RG -n $VMSS \
+  --set 'virtualMachineProfile.networkProfile.networkInterfaceConfigurations[0].primary=true' \
+  --add virtualMachineProfile.networkProfile.networkInterfaceConfigurations '{
+    "name": "dpdk-nic",
+    "primary": false,
+    "enableAcceleratedNetworking": true,
+    "ipConfigurations": [{"name": "dpdk-ipconfig","subnet": {"id": "'$DPDK_SUBNET_ID'"}}]
+  }' -o none
+az vmss update-instances -g $RG -n $VMSS --instance-ids 0
+az vmss start -g $RG -n $VMSS --instance-ids 0
+```
+
+#### Step 3: Verify on Node
+
+```bash
+# Expected kernel: 6.8.0-1046-azure
+uname -r
+
+# MANA PCI device (vendor 1414, device 00ba)
+lspci -d 1414:00ba
+# → 7870:00:00.0 Ethernet controller: Microsoft Corporation Device 00ba
+
+# mana_ib is built-in (auto-loaded) — IB devices exist immediately
+ls /sys/class/infiniband/
+# → mana_0  manae_0
+
+ls /dev/infiniband/
+# → uverbs0  uverbs1
+
+# Both NICs visible
+ip -br link | grep -E "eth|enP"
+# → eth0             UP    7c:1e:52:33:66:28
+# → eth1             DOWN  60:45:bd:fd:d8:eb
+# → enP30832s1       UP    7c:1e:52:33:66:28  (MANA VF for eth0)
+# → enP30832s1d1     DOWN  60:45:bd:fd:d8:eb  (MANA VF for eth1)
+```
+
+#### Step 4: Build rdma-core v46 + DPDK v24.11
+
+```bash
+# Build rdma-core v46 (provides libmana)
+git clone https://github.com/linux-rdma/rdma-core.git -b v46.0 --depth 1
+cd rdma-core && mkdir build && cd build
+cmake -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_INSTALL_LIBDIR=lib/x86_64-linux-gnu ..
+make -j$(nproc) && make install
+
+# Build DPDK v24.11 (provides net_mana PMD)
+git clone https://github.com/DPDK/dpdk.git -b v24.11 --depth 1
+cd dpdk && meson build && cd build && ninja && ninja install && ldconfig
+
+# Verify MANA PMD was compiled
+dpdk-testpmd --help  # Should work without errors
+```
+
+#### Step 5: Bind eth1 and Run testpmd
+
+```bash
+# Get MANA interface details
+SECONDARY=$(ip -br link show master eth1 | awk '{ print $1 }')
+MANA_MAC=$(ip -br link show master eth1 | awk '{ print $3 }')
+BUS_INFO=$(ethtool -i $SECONDARY | grep bus-info | awk '{ print $2 }')
+DEV_UUID=$(basename $(readlink /sys/class/net/eth1/device))
+
+# Set eth1 DOWN (critical!)
+ip link set eth1 down
+ip link set $SECONDARY down
+
+# Bind netvsc to uio_hv_generic
+modprobe uio_hv_generic
+NET_UUID="f8615163-df3e-46c5-913f-f2d2f965ed0e"
+echo $NET_UUID > /sys/bus/vmbus/drivers/uio_hv_generic/new_id
+echo $DEV_UUID > /sys/bus/vmbus/drivers/hv_netvsc/unbind
+echo $DEV_UUID > /sys/bus/vmbus/drivers/uio_hv_generic/bind
+
+# Run testpmd
+dpdk-testpmd -l 0-1 --no-huge -m 512 --iova-mode va \
+  --vdev="$BUS_INFO,mac=$MANA_MAC" \
+  -- --forward-mode=txonly --auto-start --txd=128 --rxd=128 --stats 2
+```
+
+**Expected output:**
+```
+EAL: Probe PCI driver: net_mana (1414:00ba) device: 7870:00:00.0
+MANA_DRIVER: mana_mr_btree_init(): B-tree initialized
+Configuring Port 0 (socket 0)
+Port 0: 60:45:BD:FD:D8:EB
+txonly packet forwarding - ports=1 - cores=1 - streams=1
+port 0: RX queue number: 1 Tx queue number: 1
+```
+
+### Key Differences: MANA vs Mellanox DPDK
+
+| Aspect | Mellanox ConnectX (old) | MANA (new) |
+|--------|------------------------|------------|
+| PCI ID | `15b3:101a` | `1414:00ba` |
+| DPDK PMD | `mlx5` (bound by PCI address) | `net_mana` (bound by **MAC address**) |
+| EAL args | `--allow <pci_addr>` | `--vdev="<bus_info>,mac=<MAC>"` |
+| Kernel driver for DPDK | `vfio-pci` or `uio_pci_generic` | `uio_hv_generic` (for netvsc channel) |
+| IB/RDMA kernel module | `mlx5_ib` | `mana_ib` (requires kernel 6.2+) |
+| VF passthrough | Azure blocks PCI unbind | Works via netvsc → `uio_hv_generic` |
+| VM SKU guarantee | v5 may get Mellanox or MANA | **v6-series always gets MANA** |
+
+### Known Limitations
+
+| Issue | Details | Workaround |
+|-------|---------|------------|
+| **HugePages in K8s pods** | K8s cgroup blocks hugetlb allocation unless pod requests `hugepages-2Mi` resource, but AKS nodes report 0 allocatable hugepages | Use `--no-huge -m 512` for testing; in production, pre-allocate hugepages via `--linux-os-config` before cluster creation |
+| **eth1 requires VMSS restart** | After binding eth1 to `uio_hv_generic`, the netvsc synthetic is removed. Undoing this requires a VMSS restart | Design pods to bind eth1 at startup and keep it bound |
+| **`uio_hv_generic` module on Ubuntu 24.04** | Module exists on host but not in container `/lib/modules` | Use `chroot /host modprobe uio_hv_generic` from privileged pod |
+| **TX-packets: 0 with `--no-huge`** | Limited memory with `--no-huge` may result in 0 traffic | Use proper hugepages for production traffic |
 
 ---
 
