@@ -194,6 +194,35 @@ plugins {
 2. `ip link set enP30832s1d1 down` (DPDK needs VF down)
 3. Hugepages allocated: `echo 1024 > /sys/devices/system/node/node*/hugepages/hugepages-2048kB/nr_hugepages`
 
+## Artifact Backup & Restore
+
+### Local backup (Mac)
+The full artifact tarball (rdma-core + DPDK + VPP + plugins) is saved locally:
+```
+~/SASE/aks-dpdk-poc/artifacts/vpp-dpdk-all.tar.gz   (152MB)
+```
+It is also saved on the AKS node at `/host/tmp/vpp-dpdk-all.tar.gz` (survives pod restarts but not node reimaging).
+
+### Restore after pod recreation
+```bash
+# Copy tarball into new pod
+kubectl cp ~/SASE/aks-dpdk-poc/artifacts/vpp-dpdk-all.tar.gz default/vpp-mana:/tmp/vpp-dpdk-all.tar.gz
+
+# Extract and ldconfig
+kubectl exec vpp-mana -- sh -c 'tar xzf /tmp/vpp-dpdk-all.tar.gz -C / && ldconfig'
+
+# Remove failsafe PMDs (CRITICAL - prevents MANA hijack)
+kubectl exec vpp-mana -- sh -c 'rm -f /usr/local/lib/x86_64-linux-gnu/dpdk/pmds-25.0/librte_net_{failsafe,tap,netvsc,vdev_netvsc}*; ldconfig'
+```
+Or use the automated restore script: `aks-dpdk-poc/full-setup-vpp-mana.sh`
+
+### What's in the tarball
+- `/usr/local/bin/vpp`, `/usr/local/bin/vppctl`, `/usr/local/bin/dpdk-testpmd`
+- `/usr/local/lib/x86_64-linux-gnu/` — all VPP + DPDK shared libraries + plugins
+- `/usr/lib/x86_64-linux-gnu/libmana*` — rdma-core MANA verbs provider
+- `/usr/lib/x86_64-linux-gnu/libibverbs/` — ibverbs providers
+- `/lib/x86_64-linux-gnu/libmlx5*` — MLX5_1.24 from rdma-core v46
+
 ## Netvsc Binding Procedure (NOT needed for bifurcated DPDK)
 **Note**: MANA DPDK uses bifurcated driver model (kernel mana driver + rdma-core verbs + DPDK PMD).
 No UIO/VFIO binding needed. The kernel `mana` driver stays loaded. Just set the VF interface DOWN.
@@ -220,14 +249,12 @@ The old netvsc unbind procedure below is **NOT required** and causes eth1 to dis
 | `aks-dpdk-poc/Dockerfile.vpp-mana` | Multi-stage Docker build (needs failsafe PMD removal step) |
 
 ## Next Steps
-1. **Wait for rebuild** to complete (`kubectl exec vpp-mana -- tail -5 /tmp/rebuild.log`)
-2. **Verify VPP starts with MANA DPDK** — `vppctl show interface` should show `mana0`
-3. If VPP spins: debug `goto next_device` patch — VPP may try probing eth0's port first and hang
-4. Set up VXLAN tunnel: branch-vm (10.120.4.4) → VPP pod
-5. E2E traffic test: ping + iperf3 through VPP DPDK
-6. Update Dockerfile with all three fixes (cgroup, rdma-core v46, VPP patch)
-7. Build Docker image to ACR
-8. Document results in aks-dpdk-poc/README.md
+1. **Fix `rte_eth_dev_start()` -22 error** — testpmd works with 128 desc, VPP uses 1024. Investigate VPP queue setup vs MANA limits
+2. **Fix SIGSEGV in `dpdk_counters_xstats_init()`** — patch xstats path or fix root cause (dev_start failure)
+3. Set up VXLAN tunnel: branch-vm (10.120.4.4) → VPP pod
+4. E2E traffic test: ping + iperf3 through VPP DPDK
+5. Update Dockerfile with all fixes (cgroup, rdma-core v46, VPP patches, failsafe PMD removal)
+6. Build Docker image to ACR
 
 ## Other Clusters (can be deleted to save cost)
 - `sase-dpdk-aks` — old Mellanox cluster (Ubuntu 22.04, D4s_v5)

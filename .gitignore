@@ -1,0 +1,3 @@
+# Build artifacts (too large for git)
+aks-dpdk-poc/artifacts/
+*.tar.gz
