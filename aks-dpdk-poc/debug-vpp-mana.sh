@@ -39,7 +39,7 @@ echo "[4] Test DPDK with PCI scan (allow-list MANA)..."
 # Use -a (allow) with PCI address and MAC to select the right VF
 rm -rf /var/run/dpdk
 timeout 15 dpdk-testpmd -l 0-1 --no-huge -m 256 \
-  -a 7870:00:00.0,mac=60:45:bd:fd:d8:eb \
+  -a 7870:00:00.0,mac=7c:ed:8d:25:e4:4d \
   --iova-mode va \
   -- --no-start --txd=128 --rxd=128 2>&1 | tee /tmp/testpmd-pci.log
 TESTPMD_RC=$?
@@ -51,7 +51,7 @@ if [ $TESTPMD_RC -ne 0 ]; then
     pkill -9 -f testpmd 2>/dev/null; sleep 1
     rm -rf /var/run/dpdk
     timeout 15 dpdk-testpmd -l 0-1 --no-huge -m 256 \
-      --vdev="7870:00:00.0,mac=60:45:bd:fd:d8:eb" \
+      --vdev="7870:00:00.0,mac=7c:ed:8d:25:e4:4d" \
       --no-pci --iova-mode va \
       -- --no-start --txd=128 --rxd=128 2>&1 | tee /tmp/testpmd-vdev.log
     TESTPMD_RC=$?
@@ -98,7 +98,7 @@ buffers {
 dpdk {
   dev 7870:00:00.0 {
     name mana0
-    devargs mac=60:45:bd:fd:d8:eb
+    devargs mac=7c:ed:8d:25:e4:4d
   }
   no-hugetlb
   iova-mode va
@@ -128,7 +128,7 @@ buffers {
 dpdk {
   no-pci
   no-hugetlb
-  vdev 7870:00:00.0,mac=60:45:bd:fd:d8:eb
+  vdev 7870:00:00.0,mac=7c:ed:8d:25:e4:4d
   iova-mode va
 }
 plugins {

@@ -5,7 +5,7 @@ metadata:
 spec:
   hostNetwork: true
   hostPID: true
-  nodeName: aks-nodepool1-38799324-vmss000000
+  nodeName: aks-nodepool1-38799324-vmss000001
   containers:
   - name: vpp
     image: ubuntu:22.04

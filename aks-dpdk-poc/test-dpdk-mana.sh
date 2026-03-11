@@ -19,7 +19,7 @@ echo "=== Testing DPDK MANA with PCI mode + hugepages ==="
 # Use -a (allow) with mac filter, MANA PCI address
 # Remove --no-start (invalid for this version)
 timeout 20 dpdk-testpmd -l 0-1 \
-    -a 7870:00:00.0,mac=60:45:bd:fd:d8:eb \
+    -a 7870:00:00.0,mac=7c:ed:8d:25:e4:4d \
     --iova-mode va \
     -m 512 \
     -- --auto-start --txd=128 --rxd=128 \

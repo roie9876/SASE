@@ -24,7 +24,7 @@ Cloud-native SASE platform on AKS using FD.io VPP with DPDK kernel bypass on MAN
 - **VM Size**: `Standard_D4s_v6` (guaranteed MANA NIC)
 - **Network**: Dual-stack IPv4/IPv6, Azure CNI overlay + Cilium
 - **VNet**: `AKS-DualStack-VNet` (10.120.0.0/16 + fd00:db8:deca::/48)
-- **Node**: `aks-nodepool1-38799324-vmss000000` (IP: 10.120.2.6)
+- **Node**: `aks-nodepool1-38799324-vmss000001` (IP: 10.120.2.4)
 - **Dual NIC**: eth0 (K8s mgmt, 10.120.2.x) + eth1 (DPDK, 10.120.3.x subnet via dpdk-nic)
 - **ACR**: `sasepocacr.azurecr.io` (Standard SKU, attached to AKS)
 
@@ -70,14 +70,14 @@ EAL: Selected IOVA mode 'VA'
 MANA_DRIVER: mana_init_once(): MP INIT PRIMARY
 MANA_DRIVER: mana_mr_btree_init(): B-tree initialized
 Configuring Port 0 (socket 0)
-Port 0: 60:45:BD:FD:D8:EB
+Port 0: 7C:ED:8D:25:E4:4D
 port 0: RX queue number: 1 Tx queue number: 1
 io packet forwarding - ports=1 - cores=1 - streams=1
 ```
 **Command that works:**
 ```bash
 echo $$ > /sys/fs/cgroup/cgroup.procs  # MUST escape pod cgroup first!
-dpdk-testpmd -l 0-1 -a 7870:00:00.0,mac=60:45:bd:fd:d8:eb --iova-mode va -m 512 -- --auto-start --txd=128 --rxd=128
+dpdk-testpmd -l 0-1 -a 7870:00:00.0,mac=7c:ed:8d:25:e4:4d --iova-mode va -m 512 -- --auto-start --txd=128 --rxd=128
 ```
 
 ### Three Critical Fixes Discovered
@@ -156,7 +156,7 @@ next_device:
 
 ## MANA Interface Details
 - **PCI**: `7870:00:00.0` (vendor 1414, device 00ba)
-- **eth1 MAC**: `60:45:bd:fd:d8:eb`
+- **eth1 MAC**: `7c:ed:8d:25:e4:4d`
 - **eth1 VF**: `enP30832s1d1`
 - **Bus info**: `7870:00:00.0`
 - **Device UUID**: `f8615163-0001-1000-2000-6045bdfdd8eb`
@@ -178,7 +178,7 @@ buffers {
 dpdk {
   dev 7870:00:00.0 {
     name mana0
-    devargs mac=60:45:bd:fd:d8:eb
+    devargs mac=7c:ed:8d:25:e4:4d
   }
   iova-mode va
   uio-driver auto

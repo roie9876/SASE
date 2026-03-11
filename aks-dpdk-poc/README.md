@@ -1101,9 +1101,9 @@ ls /dev/infiniband/
 # Both NICs visible
 ip -br link | grep -E "eth|enP"
 # → eth0             UP    7c:1e:52:33:66:28
-# → eth1             DOWN  60:45:bd:fd:d8:eb
+# → eth1             DOWN  7c:ed:8d:25:e4:4d
 # → enP30832s1       UP    7c:1e:52:33:66:28  (MANA VF for eth0)
-# → enP30832s1d1     DOWN  60:45:bd:fd:d8:eb  (MANA VF for eth1)
+# → enP30832s1d1     DOWN  7c:ed:8d:25:e4:4d  (MANA VF for eth1)
 ```
 
 #### Step 4: Build rdma-core v46 + DPDK v24.11
@@ -1154,7 +1154,7 @@ dpdk-testpmd -l 0-1 --no-huge -m 512 --iova-mode va \
 EAL: Probe PCI driver: net_mana (1414:00ba) device: 7870:00:00.0
 MANA_DRIVER: mana_mr_btree_init(): B-tree initialized
 Configuring Port 0 (socket 0)
-Port 0: 60:45:BD:FD:D8:EB
+Port 0: 7C:ED:8D:25:E4:4D
 txonly packet forwarding - ports=1 - cores=1 - streams=1
 port 0: RX queue number: 1 Tx queue number: 1
 ```

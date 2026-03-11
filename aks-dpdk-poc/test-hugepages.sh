@@ -18,7 +18,7 @@ echo "=== Test 3: DPDK testpmd with hugedir=/mnt/huge ==="
 pkill -9 testpmd 2>/dev/null; rm -rf /var/run/dpdk; sleep 1
 ip link set enP30832s1d1 down 2>/dev/null
 timeout 15 dpdk-testpmd -l 0-1 \
-    --vdev="7870:00:00.0,mac=60:45:bd:fd:d8:eb" \
+    --vdev="7870:00:00.0,mac=7c:ed:8d:25:e4:4d" \
     --no-pci --iova-mode va \
     --huge-dir=/mnt/huge -m 512 \
     -- --no-start --txd=128 --rxd=128 2>&1
@@ -28,7 +28,7 @@ pkill -9 testpmd 2>/dev/null; rm -rf /var/run/dpdk
 echo "=== Test 4: DPDK testpmd with hugedir=/host/dev/hugepages ==="
 sleep 1
 timeout 15 dpdk-testpmd -l 0-1 \
-    --vdev="7870:00:00.0,mac=60:45:bd:fd:d8:eb" \
+    --vdev="7870:00:00.0,mac=7c:ed:8d:25:e4:4d" \
     --no-pci --iova-mode va \
     --huge-dir=/host/dev/hugepages -m 512 \
     -- --no-start --txd=128 --rxd=128 2>&1

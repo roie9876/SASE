@@ -40,7 +40,7 @@ buffers {
 dpdk {
   dev 7870:00:00.0 {
     name mana0
-    devargs mac=60:45:bd:fd:d8:eb
+    devargs mac=7c:ed:8d:25:e4:4d
     num-rx-queues 1
     num-tx-queues 1
   }

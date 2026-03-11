@@ -136,7 +136,7 @@ rm -rf /var/run/dpdk
 sleep 1
 ip link set enP30832s1d1 down 2>/dev/null || true
 timeout 15 dpdk-testpmd -l 0-1 \
-    -a 7870:00:00.0,mac=60:45:bd:fd:d8:eb \
+    -a 7870:00:00.0,mac=7c:ed:8d:25:e4:4d \
     --iova-mode va -m 512 \
     -- --auto-start --txd=128 --rxd=128 \
     > /tmp/testpmd-verify.log 2>&1
@@ -172,7 +172,7 @@ buffers {
 dpdk {
   dev 7870:00:00.0 {
     name mana0
-    devargs mac=60:45:bd:fd:d8:eb
+    devargs mac=7c:ed:8d:25:e4:4d
   }
   iova-mode va
   uio-driver auto

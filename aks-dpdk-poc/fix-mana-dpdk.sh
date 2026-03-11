@@ -61,7 +61,7 @@ echo ""
 echo "[8] Testing DPDK MANA with original working command..."
 rm -rf /var/run/dpdk
 timeout 20 dpdk-testpmd -l 0-1 \
-    -a 7870:00:00.0,mac=60:45:bd:fd:d8:eb \
+    -a 7870:00:00.0,mac=7c:ed:8d:25:e4:4d \
     --iova-mode va -m 512 \
     -- --auto-start --txd=128 --rxd=128 \
     > /tmp/testpmd-native.log 2>&1 || true
@@ -92,7 +92,7 @@ rm -rf /var/run/dpdk
 
 printf "show port info all\nquit\n" > /tmp/tp-info.cmd
 timeout 20 dpdk-testpmd -l 0-1 \
-    -a 7870:00:00.0,mac=60:45:bd:fd:d8:eb \
+    -a 7870:00:00.0,mac=7c:ed:8d:25:e4:4d \
     --iova-mode va -m 512 \
     -- -i --txd=128 --rxd=128 --cmdline-file=/tmp/tp-info.cmd \
     > /tmp/testpmd-info.log 2>&1 || true

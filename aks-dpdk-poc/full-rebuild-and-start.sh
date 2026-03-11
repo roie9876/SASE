@@ -46,6 +46,14 @@ ldconfig
 echo "DPDK MANA: $(find /usr/local/lib -name 'librte_net_mana.so*' | head -1)"
 echo "testpmd: $(which dpdk-testpmd)"
 
+# Remove failsafe/netvsc PMDs that hijack MANA device
+rm -f /usr/local/lib/x86_64-linux-gnu/dpdk/pmds-25.0/librte_net_failsafe*
+rm -f /usr/local/lib/x86_64-linux-gnu/dpdk/pmds-25.0/librte_net_tap*
+rm -f /usr/local/lib/x86_64-linux-gnu/dpdk/pmds-25.0/librte_net_netvsc*
+rm -f /usr/local/lib/x86_64-linux-gnu/dpdk/pmds-25.0/librte_net_vdev_netvsc*
+ldconfig
+echo "Failsafe PMDs removed"
+
 echo "===== [5/9] Allocate hugepages ====="
 echo 1024 | tee /sys/devices/system/node/node*/hugepages/hugepages-2048kB/nr_hugepages > /dev/null
 grep HugePages_Total /proc/meminfo
@@ -54,7 +62,7 @@ echo "===== [6/9] Verify DPDK MANA testpmd ====="
 rm -rf /var/run/dpdk
 ip link set enP30832s1d1 down 2>/dev/null || true
 timeout 15 dpdk-testpmd -l 0-1 \
-    -a 7870:00:00.0,mac=60:45:bd:fd:d8:eb \
+    -a 7870:00:00.0,mac=7c:ed:8d:25:e4:4d \
     --iova-mode va -m 512 \
     -- --auto-start --txd=128 --rxd=128 \
     > /tmp/testpmd-check.log 2>&1
@@ -88,11 +96,14 @@ with open("src/plugins/dpdk/CMakeLists.txt", "w") as f:
 
 with open("src/plugins/dpdk/device/init.c", "r") as f:
     c = f.read()
-old = """    /* Google vNIC */
+
+# Patch 1: MANA PCI whitelist (skip UIO bind)
+if "0x1414" not in c:
+    old = """    /* Google vNIC */
     else if (d->vendor_id == 0x1ae0 && d->device_id == 0x0042)
       ;
     else"""
-new = """    /* Google vNIC */
+    new = """    /* Google vNIC */
     else if (d->vendor_id == 0x1ae0 && d->device_id == 0x0042)
       ;
     /* Microsoft Azure MANA - bifurcated driver, skip UIO bind */
@@ -101,13 +112,44 @@ new = """    /* Google vNIC */
         goto next_device;
       }
     else"""
-c = c.replace(old, new)
-old2 = "  vec_free (pci_addr);\n  vlib_pci_free_device_info (d);\n}"
-new2 = "next_device:\n  vec_free (pci_addr);\n  vlib_pci_free_device_info (d);\n}"
-c = c.replace(old2, new2, 1)
+    c = c.replace(old, new)
+    old2 = "  vec_free (pci_addr);\n  vlib_pci_free_device_info (d);\n}"
+    new2 = "next_device:\n  vec_free (pci_addr);\n  vlib_pci_free_device_info (d);\n}"
+    c = c.replace(old2, new2, 1)
+    print("  Applied MANA PCI whitelist patch")
+
+# Patch 2: Remove --in-memory (blocks ibverbs DMA for MANA CQ creation)
+if '--in-memory' in c and '/* MANA fix' not in c:
+    c = c.replace(
+        'vec_add1 (conf->eal_init_args, (u8 *) "--in-memory");',
+        '/* MANA fix: --in-memory blocks ibverbs DMA registration */\n      /* vec_add1 (conf->eal_init_args, (u8 *) "--in-memory"); */'
+    )
+    print("  Removed --in-memory from EAL args")
+
 with open("src/plugins/dpdk/device/init.c", "w") as f:
     f.write(c)
-print("VPP patched: system DPDK + MANA whitelist + skip UIO")
+
+# Patch 3: Add MANA to VPP driver classification table
+with open("src/plugins/dpdk/device/driver.c", "r") as f:
+    d = f.read()
+if "net_mana" not in d:
+    old_drv = '''  {
+    .drivers = DPDK_DRIVERS ({ "net_gve", "Google vNIC" }),
+    .interface_name_prefix = "VirtualFunctionEthernet",
+  }'''
+    new_drv = '''  {
+    .drivers = DPDK_DRIVERS ({ "net_gve", "Google vNIC" }),
+    .interface_name_prefix = "VirtualFunctionEthernet",
+  },
+  {
+    .drivers = DPDK_DRIVERS ({ "net_mana", "Microsoft Azure MANA" }),
+  }'''
+    d = d.replace(old_drv, new_drv)
+    with open("src/plugins/dpdk/device/driver.c", "w") as f:
+        f.write(d)
+    print("  Added net_mana to driver.c")
+
+print("VPP patched: system DPDK + MANA whitelist + no --in-memory + driver entry")
 PYEOF
 
 echo "===== [8/9] Build VPP ====="
@@ -148,6 +190,7 @@ conf = '''unix {
   log /tmp/vpp-mana.log
   cli-listen /run/vpp/cli.sock
   full-coredump
+  poll-sleep-usec 100
 }
 buffers {
   buffers-per-numa 16384
@@ -156,8 +199,11 @@ buffers {
 dpdk {
   dev 7870:00:00.0 {
     name mana0
-    devargs mac=60:45:bd:fd:d8:eb
+    devargs mac=7c:ed:8d:25:e4:4d
+    num-rx-queues 1
+    num-tx-queues 1
   }
+  no-tx-checksum-offload
   iova-mode va
   uio-driver auto
 }
@@ -206,8 +252,21 @@ echo ""
 echo "Interfaces:"
 vppctl show interface 2>&1
 echo ""
+
+echo "Bringing up mana0..."
+vppctl set interface state mana0 up 2>&1 || true
+vppctl set interface ip address mana0 10.120.3.10/24 2>&1 || true
+sleep 2
+
+echo ""
+echo "Interface state after admin-up:"
+vppctl show interface 2>&1
+echo ""
+echo "Address:"
+vppctl show interface addr 2>&1
+echo ""
 echo "Hardware:"
-vppctl show hardware-interfaces 2>&1
+vppctl show hardware-interfaces 2>&1 | head -25
 echo ""
 echo "Log:"
 cat /tmp/vpp-mana.log 2>/dev/null
