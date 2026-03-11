@@ -12,6 +12,11 @@ spec:
     command: ["/bin/bash", "-c", "ulimit -l unlimited && exec sleep infinity"]
     securityContext:
       privileged: true
+    resources:
+      requests:
+        memory: "4Gi"
+      limits:
+        memory: "8Gi"
     volumeMounts:
     - name: hugepages
       mountPath: /dev/hugepages

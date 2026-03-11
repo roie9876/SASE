@@ -1,0 +1,217 @@
+#!/bin/bash
+# ==========================================================
+# Complete rebuild: rdma-core + DPDK + VPP with MANA patch
+# THEN: start VPP with DPDK MANA kernel bypass
+# ==========================================================
+set -e
+
+echo "===== [1/9] Move to root cgroup (hugepage access) ====="
+echo $$ > /sys/fs/cgroup/cgroup.procs
+echo "PID $$ in root cgroup"
+
+echo "===== [2/9] Install ALL build deps ====="
+DEBIAN_FRONTEND=noninteractive apt-get update > /dev/null 2>&1
+DEBIAN_FRONTEND=noninteractive apt-get install -y \
+  build-essential libudev-dev libnl-3-dev libnl-route-3-dev \
+  ninja-build libssl-dev libelf-dev python3-pip python3-venv meson libnuma-dev \
+  rdma-core ibverbs-providers libibverbs-dev librdmacm-dev \
+  curl gnupg2 git cmake iproute2 ethtool pciutils kmod \
+  pkg-config python3-docutils util-linux sudo nasm uuid-dev \
+  iputils-ping iperf3 binutils autoconf automake libtool \
+  clang libpcap-dev libunwind-dev python3-ply > /dev/null 2>&1
+pip3 install pyelftools ply > /dev/null 2>&1
+echo "Deps OK"
+
+echo "===== [3/9] Build rdma-core v46 ====="
+cd /tmp
+rm -rf /tmp/rdma-core
+git clone https://github.com/linux-rdma/rdma-core.git -b v46.0 --depth 1 > /dev/null 2>&1
+cd rdma-core && mkdir build && cd build
+cmake -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_INSTALL_LIBDIR=lib/x86_64-linux-gnu -DNO_MAN_PAGES=1 .. > /dev/null 2>&1
+make -j4 > /dev/null 2>&1
+cmake --install . > /dev/null 2>&1
+ldconfig
+echo "rdma-core v46: $(pkg-config --modversion libmana 2>/dev/null)"
+echo "MLX5: $(objdump -p /lib/x86_64-linux-gnu/libmlx5.so.1 2>/dev/null | grep MLX5_1.24)"
+
+echo "===== [4/9] Build DPDK v24.11 ====="
+cd /tmp
+rm -rf /tmp/dpdk-24
+git clone https://github.com/DPDK/dpdk.git -b v24.11 --depth 1 dpdk-24 > /dev/null 2>&1
+cd dpdk-24
+meson setup build --default-library=shared -Dprefix=/usr/local > /dev/null 2>&1
+cd build && ninja -j4 > /dev/null 2>&1
+ninja install > /dev/null 2>&1
+ldconfig
+echo "DPDK MANA: $(find /usr/local/lib -name 'librte_net_mana.so*' | head -1)"
+echo "testpmd: $(which dpdk-testpmd)"
+
+echo "===== [5/9] Allocate hugepages ====="
+echo 1024 | tee /sys/devices/system/node/node*/hugepages/hugepages-2048kB/nr_hugepages > /dev/null
+grep HugePages_Total /proc/meminfo
+
+echo "===== [6/9] Verify DPDK MANA testpmd ====="
+rm -rf /var/run/dpdk
+ip link set enP30832s1d1 down 2>/dev/null || true
+timeout 15 dpdk-testpmd -l 0-1 \
+    -a 7870:00:00.0,mac=60:45:bd:fd:d8:eb \
+    --iova-mode va -m 512 \
+    -- --auto-start --txd=128 --rxd=128 \
+    > /tmp/testpmd-check.log 2>&1
+if grep -Eq "Port [0-9]+:" /tmp/testpmd-check.log; then
+    echo "DPDK MANA testpmd: WORKS"
+  grep -E "Port [0-9]+:" /tmp/testpmd-check.log | head -1
+else
+    echo "DPDK MANA testpmd: FAILED"
+    cat /tmp/testpmd-check.log
+fi
+pkill -9 testpmd 2>/dev/null || true
+rm -rf /var/run/dpdk
+sleep 1
+
+echo "===== [7/9] Clone & patch VPP v26.02 ====="
+cd /tmp
+rm -rf /tmp/vpp
+git clone https://gerrit.fd.io/r/vpp -b v26.02 --depth 1 > /dev/null 2>&1
+cd vpp
+
+# Apply patches via python
+python3 << 'PYEOF'
+with open("src/plugins/dpdk/CMakeLists.txt", "r") as f:
+    c = f.read()
+c = c.replace(
+    'option(VPP_USE_SYSTEM_DPDK "Use the system installation of DPDK." OFF)',
+    'option(VPP_USE_SYSTEM_DPDK "Use system DPDK" ON)'
+)
+with open("src/plugins/dpdk/CMakeLists.txt", "w") as f:
+    f.write(c)
+
+with open("src/plugins/dpdk/device/init.c", "r") as f:
+    c = f.read()
+old = """    /* Google vNIC */
+    else if (d->vendor_id == 0x1ae0 && d->device_id == 0x0042)
+      ;
+    else"""
+new = """    /* Google vNIC */
+    else if (d->vendor_id == 0x1ae0 && d->device_id == 0x0042)
+      ;
+    /* Microsoft Azure MANA - bifurcated driver, skip UIO bind */
+    else if (d->vendor_id == 0x1414 && d->device_id == 0x00ba)
+      {
+        goto next_device;
+      }
+    else"""
+c = c.replace(old, new)
+old2 = "  vec_free (pci_addr);\n  vlib_pci_free_device_info (d);\n}"
+new2 = "next_device:\n  vec_free (pci_addr);\n  vlib_pci_free_device_info (d);\n}"
+c = c.replace(old2, new2, 1)
+with open("src/plugins/dpdk/device/init.c", "w") as f:
+    f.write(c)
+print("VPP patched: system DPDK + MANA whitelist + skip UIO")
+PYEOF
+
+echo "===== [8/9] Build VPP ====="
+touch build-root/.deps.ok
+export PKG_CONFIG_PATH=/usr/local/lib/x86_64-linux-gnu/pkgconfig:$PKG_CONFIG_PATH
+echo "Building VPP (this takes ~30 min)..."
+make build-release CMAKE_ARGS="-DVPP_USE_SYSTEM_DPDK=ON" 2>&1 | tail -5
+VPP_DIR=/tmp/vpp/build-root/install-vpp-native/vpp
+cp -a $VPP_DIR/bin/* /usr/local/bin/ 2>/dev/null
+cp -a $VPP_DIR/lib/* /usr/local/lib/ 2>/dev/null
+
+# CRITICAL: copy the PATCHED dpdk_plugin from build dir (not install dir)
+cp -f /tmp/vpp/build-root/build-vpp-native/vpp/lib/x86_64-linux-gnu/vpp_plugins/dpdk_plugin.so \
+      /usr/local/lib/x86_64-linux-gnu/vpp_plugins/dpdk_plugin.so
+ldconfig
+echo "VPP: $(vpp --version 2>&1 | head -1)"
+
+# Save to host /tmp for future restores
+tar czf /host/tmp/vpp-dpdk-all.tar.gz \
+  /usr/local/bin/vpp /usr/local/bin/vppctl /usr/local/bin/dpdk-testpmd \
+  /usr/local/lib/x86_64-linux-gnu/ \
+  /usr/lib/x86_64-linux-gnu/libmana* \
+  /usr/lib/x86_64-linux-gnu/libibverbs/ \
+  /lib/x86_64-linux-gnu/libmlx5* \
+  2>/dev/null
+echo "Backup saved: $(ls -lh /host/tmp/vpp-dpdk-all.tar.gz | awk '{print $5}')"
+
+echo "===== [9/9] Start VPP with DPDK MANA ====="
+pkill -9 -f "vpp -c" 2>/dev/null || true
+sleep 1
+rm -f /tmp/vpp-mana.log /run/vpp/cli.sock
+rm -rf /var/run/dpdk
+mkdir -p /etc/vpp /run/vpp
+
+python3 -c "
+conf = '''unix {
+  nodaemon
+  log /tmp/vpp-mana.log
+  cli-listen /run/vpp/cli.sock
+  full-coredump
+}
+buffers {
+  buffers-per-numa 16384
+  default data-size 2048
+}
+dpdk {
+  dev 7870:00:00.0 {
+    name mana0
+    devargs mac=60:45:bd:fd:d8:eb
+  }
+  iova-mode va
+  uio-driver auto
+}
+plugins {
+  plugin dpdk_plugin.so { enable }
+  plugin default { disable }
+  plugin ping_plugin.so { enable }
+}
+'''
+with open('/etc/vpp/startup.conf', 'w') as f:
+    f.write(conf)
+"
+
+ip link set enP30832s1d1 down 2>/dev/null || true
+echo "Starting VPP..."
+vpp -c /etc/vpp/startup.conf &
+VPP_PID=$!
+echo "VPP PID: $VPP_PID"
+
+for i in $(seq 1 30); do
+    if vppctl show version > /dev/null 2>&1; then
+        echo "VPP CLI ready (${i}s)"
+        break
+    fi
+    sleep 1
+    if ! kill -0 $VPP_PID 2>/dev/null; then
+        echo "VPP CRASHED after ${i}s!"
+        cat /tmp/vpp-mana.log 2>/dev/null
+        exit 1
+    fi
+    CPU=$(ps -p $VPP_PID -o pcpu= 2>/dev/null | tr -d ' ')
+    if [ -n "$CPU" ] && [ "${CPU%.*}" -gt 95 ] 2>/dev/null && [ $i -gt 10 ]; then
+        echo "VPP spinning at ${CPU}% after ${i}s - killing to prevent node lockup"
+        kill -9 $VPP_PID
+        cat /tmp/vpp-mana.log 2>/dev/null
+        exit 1
+    fi
+done
+
+echo ""
+echo "============================================"
+echo "         VPP DPDK MANA - RESULTS"
+echo "============================================"
+vppctl show version 2>&1
+echo ""
+echo "Interfaces:"
+vppctl show interface 2>&1
+echo ""
+echo "Hardware:"
+vppctl show hardware-interfaces 2>&1
+echo ""
+echo "Log:"
+cat /tmp/vpp-mana.log 2>/dev/null
+echo ""
+echo "============================================"
+echo "VPP PID: $VPP_PID"
+echo "============================================"

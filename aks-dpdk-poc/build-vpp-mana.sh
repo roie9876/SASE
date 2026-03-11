@@ -56,7 +56,8 @@ echo "[OK] VPP build deps installed"
 
 echo "=== Phase 5: Build VPP ==="
 # Build VPP - this will take a while
-make build-release 2>&1 | tail -5
+export PKG_CONFIG_PATH=/usr/local/lib/x86_64-linux-gnu/pkgconfig:$PKG_CONFIG_PATH
+make build-release CMAKE_ARGS="-DVPP_USE_SYSTEM_DPDK=ON" 2>&1 | tail -5
 echo "[OK] VPP built"
 
 echo "=== Phase 6: Check for MANA PMD ==="

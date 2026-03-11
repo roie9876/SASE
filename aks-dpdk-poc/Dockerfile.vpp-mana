@@ -18,11 +18,7 @@ RUN cd /tmp && \
     cd rdma-core && mkdir build && cd build && \
     cmake -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_INSTALL_LIBDIR=lib/x86_64-linux-gnu -DNO_MAN_PAGES=1 .. && \
     make -j$(nproc) && \
-    cmake --install . || true && \
-    cp -f /tmp/rdma-core/build/lib/libmana.so* /usr/lib/x86_64-linux-gnu/ && \
-    cp -f /tmp/rdma-core/build/lib/libibverbs/libmana-rdmav34.so /usr/lib/x86_64-linux-gnu/libibverbs/ && \
-    cp -f /tmp/rdma-core/build/lib/pkgconfig/libmana.pc /usr/lib/x86_64-linux-gnu/pkgconfig/ && \
-    cp -f /tmp/rdma-core/build/include/infiniband/manadv.h /usr/include/infiniband/ && \
+    cmake --install . && \
     ldconfig
 
 # Build DPDK v24.11 as SHARED libraries (with MANA PMD)
@@ -40,7 +36,7 @@ RUN cd /tmp && \
     sed -i 's/option(VPP_USE_SYSTEM_DPDK .* OFF)/option(VPP_USE_SYSTEM_DPDK "Use system DPDK" ON)/' \
         src/plugins/dpdk/CMakeLists.txt && \
     make install-dep UNATTENDED=y && \
-    PKG_CONFIG_PATH=/usr/local/lib/x86_64-linux-gnu/pkgconfig make build-release
+    PKG_CONFIG_PATH=/usr/local/lib/x86_64-linux-gnu/pkgconfig make build-release CMAKE_ARGS="-DVPP_USE_SYSTEM_DPDK=ON"
 
 # ---- Runtime Stage ----
 FROM ubuntu:22.04
@@ -56,16 +52,20 @@ RUN apt-get update && apt-get install -y \
 
 # Copy rdma-core v46 (libmana)
 COPY --from=builder /usr/lib/x86_64-linux-gnu/libmana* /usr/lib/x86_64-linux-gnu/
-COPY --from=builder /usr/lib/x86_64-linux-gnu/libibverbs/libmana-rdmav34.so /usr/lib/x86_64-linux-gnu/libibverbs/
+COPY --from=builder /usr/lib/x86_64-linux-gnu/libibverbs/ /usr/lib/x86_64-linux-gnu/libibverbs/
+COPY --from=builder /usr/lib/x86_64-linux-gnu/libibverbs.so* /usr/lib/x86_64-linux-gnu/
+COPY --from=builder /usr/lib/x86_64-linux-gnu/librdmacm.so* /usr/lib/x86_64-linux-gnu/
 
 # Copy DPDK shared libraries
 COPY --from=builder /usr/local/lib/x86_64-linux-gnu/librte_*.so* /usr/local/lib/x86_64-linux-gnu/
 COPY --from=builder /usr/local/lib/x86_64-linux-gnu/dpdk/ /usr/local/lib/x86_64-linux-gnu/dpdk/
 COPY --from=builder /usr/local/bin/dpdk-testpmd /usr/local/bin/
+COPY --from=builder /usr/local/bin/dpdk-devbind.py /usr/local/bin/
 
 # Copy VPP binaries and libraries
 COPY --from=builder /tmp/vpp/build-root/install-vpp-native/vpp/bin/ /usr/local/bin/
 COPY --from=builder /tmp/vpp/build-root/install-vpp-native/vpp/lib/ /usr/local/lib/
+COPY --from=builder /tmp/vpp/build-root/build-vpp-native/vpp/lib/x86_64-linux-gnu/vpp_plugins/dpdk_plugin.so /usr/local/lib/x86_64-linux-gnu/vpp_plugins/dpdk_plugin.so
 
 RUN ldconfig
 
