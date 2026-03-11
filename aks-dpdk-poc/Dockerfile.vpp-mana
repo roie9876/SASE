@@ -1,0 +1,75 @@
+FROM ubuntu:22.04 AS builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install all build dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential libudev-dev libnl-3-dev libnl-route-3-dev \
+    ninja-build libssl-dev libelf-dev python3-pip python3-venv meson libnuma-dev \
+    rdma-core ibverbs-providers libibverbs-dev librdmacm-dev \
+    curl gnupg2 git cmake iproute2 ethtool pciutils kmod \
+    pkg-config python3-docutils util-linux sudo nasm uuid-dev \
+    iputils-ping iperf3 binutils && \
+    pip3 install pyelftools ply
+
+# Build rdma-core v46 (for libmana provider)
+RUN cd /tmp && \
+    git clone https://github.com/linux-rdma/rdma-core.git -b v46.0 --depth 1 && \
+    cd rdma-core && mkdir build && cd build && \
+    cmake -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_INSTALL_LIBDIR=lib/x86_64-linux-gnu -DNO_MAN_PAGES=1 .. && \
+    make -j$(nproc) && \
+    cmake --install . || true && \
+    cp -f /tmp/rdma-core/build/lib/libmana.so* /usr/lib/x86_64-linux-gnu/ && \
+    cp -f /tmp/rdma-core/build/lib/libibverbs/libmana-rdmav34.so /usr/lib/x86_64-linux-gnu/libibverbs/ && \
+    cp -f /tmp/rdma-core/build/lib/pkgconfig/libmana.pc /usr/lib/x86_64-linux-gnu/pkgconfig/ && \
+    cp -f /tmp/rdma-core/build/include/infiniband/manadv.h /usr/include/infiniband/ && \
+    ldconfig
+
+# Build DPDK v24.11 as SHARED libraries (with MANA PMD)
+RUN cd /tmp && \
+    git clone https://github.com/DPDK/dpdk.git -b v24.11 --depth 1 && \
+    cd dpdk && \
+    meson setup build --default-library=shared -Dprefix=/usr/local && \
+    cd build && ninja -j$(nproc) && ninja install && ldconfig
+
+# Clone and build VPP v26.02 with system DPDK
+RUN cd /tmp && \
+    git clone https://gerrit.fd.io/r/vpp -b v26.02 --depth 1 && \
+    cd vpp && \
+    # Force system DPDK usage (includes MANA PMD)
+    sed -i 's/option(VPP_USE_SYSTEM_DPDK .* OFF)/option(VPP_USE_SYSTEM_DPDK "Use system DPDK" ON)/' \
+        src/plugins/dpdk/CMakeLists.txt && \
+    make install-dep UNATTENDED=y && \
+    PKG_CONFIG_PATH=/usr/local/lib/x86_64-linux-gnu/pkgconfig make build-release
+
+# ---- Runtime Stage ----
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y \
+    iproute2 ethtool pciutils kmod iputils-ping iperf3 \
+    libnuma1 libnl-3-200 libnl-route-3-200 libssl3 \
+    rdma-core ibverbs-providers libibverbs1 librdmacm1 \
+    util-linux && \
+    rm -rf /var/lib/apt/lists/*
+
+# Copy rdma-core v46 (libmana)
+COPY --from=builder /usr/lib/x86_64-linux-gnu/libmana* /usr/lib/x86_64-linux-gnu/
+COPY --from=builder /usr/lib/x86_64-linux-gnu/libibverbs/libmana-rdmav34.so /usr/lib/x86_64-linux-gnu/libibverbs/
+
+# Copy DPDK shared libraries
+COPY --from=builder /usr/local/lib/x86_64-linux-gnu/librte_*.so* /usr/local/lib/x86_64-linux-gnu/
+COPY --from=builder /usr/local/lib/x86_64-linux-gnu/dpdk/ /usr/local/lib/x86_64-linux-gnu/dpdk/
+COPY --from=builder /usr/local/bin/dpdk-testpmd /usr/local/bin/
+
+# Copy VPP binaries and libraries
+COPY --from=builder /tmp/vpp/build-root/install-vpp-native/vpp/bin/ /usr/local/bin/
+COPY --from=builder /tmp/vpp/build-root/install-vpp-native/vpp/lib/ /usr/local/lib/
+
+RUN ldconfig
+
+# Verify
+RUN vpp --version && dpdk-testpmd --version 2>&1 | head -1
+
+CMD ["sleep", "infinity"]
