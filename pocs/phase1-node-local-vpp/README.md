@@ -14,6 +14,26 @@ Prove that one AKS worker node can behave like a SASE worker with:
 - static same-node service delivery first
 - native MANA plus DPDK treated as a gated optimization track, not the only bring-up path
 
+## Current Phase 1 Status
+
+Scenario `01-vxlan-srv6-afpacket` is now the live validated baseline for Phase 1.
+
+What is proven so far:
+
+- the branch tunnel can land on the AKS forwarding NIC `eth1` instead of the node management IP
+- VPP can decapsulate VXLAN, process the SRv6 context, and deliver traffic to a same-node service pod
+- the path is stable enough for real `ping` and `iperf3` validation
+- the current tuned result is about `2.16 Gbit/s` TCP and about `1.48 Gbit/s` UDP at `1.5 Gbit/s` offered load
+
+What was learned so far:
+
+- the forwarding underlay can be larger than the active service datapath
+- on this AKS node, the Linux VXLAN interface still tops out at `1450`
+- with SRv6 encapsulation on the branch route, the practical route MTU becomes `1386`
+- PMTU alignment and offload control are required for stable TCP
+
+Read [01-vxlan-srv6-afpacket/README.md](./01-vxlan-srv6-afpacket/README.md) for the full runbook, debugging findings, MTU analysis, and performance results.
+
 ## Why This Folder Exists
 
 The repository already contains useful implementation history under `archive/legacy-pocs/aks-dpdk-poc`, but the active Phase 1 work needs its own clean location.

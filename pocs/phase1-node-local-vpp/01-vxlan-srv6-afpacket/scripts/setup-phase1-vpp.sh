@@ -20,8 +20,20 @@ mkdir -p /etc/vpp /run/vpp
 ip link del vxlan100 2>/dev/null || true
 ip link del dp0 2>/dev/null || true
 
-ip link set eth1 up
-ip link add dp0 link eth1 type macvlan mode bridge
+UNDERLAY_DEV=${UNDERLAY_DEV:-eth1}
+UNDERLAY_IP=${UNDERLAY_IP:-$(ip -4 addr show "$UNDERLAY_DEV" | awk '/inet / {print $2}' | cut -d/ -f1 | head -1)}
+UNDERLAY_GW=${UNDERLAY_GW:-10.120.3.1}
+UNDERLAY_MTU=${UNDERLAY_MTU:-3900}
+VXLAN_MTU=${VXLAN_MTU:-1450}
+BRANCH_IP=${BRANCH_IP:-10.120.4.4}
+
+ip link set "$UNDERLAY_DEV" up
+ip link set "$UNDERLAY_DEV" mtu "$UNDERLAY_MTU"
+ip rule add from "$UNDERLAY_IP"/32 table 100 2>/dev/null || true
+ip route add ${UNDERLAY_IP%.*}.0/24 dev "$UNDERLAY_DEV" src "$UNDERLAY_IP" table 100 2>/dev/null || true
+ip route add default via "$UNDERLAY_GW" dev "$UNDERLAY_DEV" table 100 2>/dev/null || true
+
+ip link add dp0 link "$UNDERLAY_DEV" type macvlan mode bridge
 ip link set dp0 up
 
 python3 << 'PYEOF'
@@ -54,13 +66,12 @@ for _ in $(seq 1 15); do
   sleep 1
 done
 
-POD_IP=$(ip -4 addr show eth0 | awk '/inet / {print $2}' | cut -d/ -f1 | head -1)
-BRANCH_IP=${BRANCH_IP:-10.120.4.4}
-
-ip link add vxlan100 type vxlan id 100 remote "$BRANCH_IP" local "$POD_IP" dstport 8472 dev eth0
-ip link set vxlan100 mtu 1400
+ip link add vxlan100 type vxlan id 100 remote "$BRANCH_IP" local "$UNDERLAY_IP" dstport 8472 dev "$UNDERLAY_DEV"
+ip link set vxlan100 mtu "$VXLAN_MTU"
 ip link set vxlan100 up
-ethtool -K vxlan100 rx off tx off >/dev/null 2>&1 || true
+for dev in "$UNDERLAY_DEV" dp0 vxlan100; do
+  ethtool -K "$dev" tso off gso off gro off tx off rx off >/dev/null 2>&1 || true
+done
 
 vppctl create host-interface name vxlan100
 vppctl set interface state host-vxlan100 up
