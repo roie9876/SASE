@@ -135,8 +135,8 @@ if "0x1414" not in content:
 else:
     print("MANA patch already present")
 
-  mana_xstats = '  if (xd->if_desc && strstr (xd->if_desc, "Microsoft Azure MANA"))\n    return;\n'
-  if mana_xstats not in content:
+mana_xstats = '  if (xd->if_desc && strstr (xd->if_desc, "Microsoft Azure MANA"))\n    return;\n'
+if mana_xstats not in content:
     content = content.replace(
       '  int len, ret, i;\n  struct rte_eth_xstat_name *xstats_names = 0;\n',
       '  int len, ret, i;\n  struct rte_eth_xstat_name *xstats_names = 0;\n\n  if (xd->if_desc && strstr (xd->if_desc, "Microsoft Azure MANA"))\n    return;\n'
@@ -145,9 +145,9 @@ else:
       f.write(content)
     print("MANA xstats bypass added to init.c")
 
-  with open("src/plugins/dpdk/device/dpdk_priv.h", "r") as f:
+with open("src/plugins/dpdk/device/dpdk_priv.h", "r") as f:
     priv = f.read()
-  if mana_xstats not in priv:
+if mana_xstats not in priv:
     priv = priv.replace(
       '  if (!(xd->flags & DPDK_DEVICE_FLAG_ADMIN_UP))\n    return;\n',
       '  if (!(xd->flags & DPDK_DEVICE_FLAG_ADMIN_UP))\n    return;\n\n  if (xd->if_desc && strstr (xd->if_desc, "Microsoft Azure MANA"))\n    return;\n'

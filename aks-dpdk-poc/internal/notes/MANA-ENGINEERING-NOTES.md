@@ -99,7 +99,7 @@ dpdk-testpmd -l 0-1 -a 7870:00:00.0,mac=7c:ed:8d:25:e4:4d --iova-mode va -m 512 
 - **Problem**: VPP v26.02 `dpdk_plugin.so` has hardcoded PCI device whitelist — MANA (`0x1414:0x00ba`) is NOT in it → `"Unsupported PCI device"` error
 - **Location**: `src/plugins/dpdk/device/init.c`, line ~800
 - **Solution**: Add MANA to whitelist with `goto next_device` (skip UIO bind, like Mellanox bifurcated driver)
-- **Patch** (apply via `aks-dpdk-poc/mana-vpp-patch.py` or manually):
+- **Patch** (apply via `aks-dpdk-poc/scripts/mana/patches/mana-vpp-patch.py` or manually):
 ```c
     /* Google vNIC */
     else if (d->vendor_id == 0x1ae0 && d->device_id == 0x0042)
@@ -214,7 +214,7 @@ kubectl exec vpp-mana -- sh -c 'tar xzf /tmp/vpp-dpdk-all.tar.gz -C / && ldconfi
 # Remove failsafe PMDs (CRITICAL - prevents MANA hijack)
 kubectl exec vpp-mana -- sh -c 'rm -f /usr/local/lib/x86_64-linux-gnu/dpdk/pmds-25.0/librte_net_{failsafe,tap,netvsc,vdev_netvsc}*; ldconfig'
 ```
-Or use the automated restore script: `aks-dpdk-poc/full-setup-vpp-mana.sh`
+Or use the automated restore script: `aks-dpdk-poc/scripts/mana/workflows/full-setup-vpp-mana.sh`
 
 ### What's in the tarball
 - `/usr/local/bin/vpp`, `/usr/local/bin/vppctl`, `/usr/local/bin/dpdk-testpmd`
@@ -238,15 +238,17 @@ The old netvsc unbind procedure below is **NOT required** and causes eth1 to dis
 
 | Script | Purpose |
 |--------|---------|
-| `aks-dpdk-poc/full-rebuild-and-start.sh` | Complete rebuild: rdma-core + DPDK + VPP (patched) + start VPP |
-| `aks-dpdk-poc/fix-mana-dpdk.sh` | Remove failsafe/netvsc PMDs and verify testpmd uses native net_mana |
-| `aks-dpdk-poc/patch-vpp-mana-driver.sh` | Patch VPP driver.c for MANA, incremental rebuild, start VPP |
-| `aks-dpdk-poc/start-vpp-clean.sh` | Clean VPP start with poll-sleep-usec (no testpmd first) |
-| `aks-dpdk-poc/start-vpp-native-mana.sh` | Start VPP with native MANA after failsafe PMDs removed |
-| `aks-dpdk-poc/mana-vpp-patch.py` | Python script to patch VPP init.c for MANA whitelist |
-| `aks-dpdk-poc/test-dpdk-mana.sh` | Quick DPDK testpmd verification on MANA |
-| `aks-dpdk-poc/start-vpp-dpdk-mana.sh` | Start VPP with DPDK MANA (assumes binaries installed) |
-| `aks-dpdk-poc/Dockerfile.vpp-mana` | Multi-stage Docker build (needs failsafe PMD removal step) |
+| `aks-dpdk-poc/scripts/mana/workflows/full-rebuild-and-start.sh` | Complete rebuild: rdma-core + DPDK + VPP (patched) + start VPP |
+| `aks-dpdk-poc/scripts/mana/workflows/full-setup-vpp-mana.sh` | Restore or rebuild the saved MANA artifact set inside a new pod |
+| `aks-dpdk-poc/scripts/mana/debug/fix-mana-dpdk.sh` | Remove failsafe/netvsc PMDs and verify testpmd uses native net_mana |
+| `aks-dpdk-poc/scripts/mana/run/start-vpp-clean.sh` | Clean VPP start with poll-sleep-usec (no testpmd first) |
+| `aks-dpdk-poc/scripts/mana/run/start-vpp-dpdk-mana.sh` | Start VPP with DPDK MANA (assumes binaries installed) |
+| `aks-dpdk-poc/scripts/mana/run/start-vpp-afpacket.sh` | Start the fallback functional VPP path over Linux `af-packet` |
+| `aks-dpdk-poc/scripts/mana/test/test-dpdk-mana.sh` | Quick DPDK testpmd verification on MANA |
+| `aks-dpdk-poc/scripts/mana/patches/mana-vpp-patch.py` | Python script to patch VPP init.c for MANA whitelist |
+| `aks-dpdk-poc/docker/Dockerfile.vpp-mana` | Multi-stage Docker build (needs failsafe PMD removal step) |
+
+Historical scripts that were kept for reference, but are not the primary entry points anymore, were moved under `aks-dpdk-poc/archive/mana/`.
 
 ## Next Steps
 1. **Validate actual dataplane traffic with `mana0` admin-up** — direct ping/ARP from branch VM to `10.120.3.10`

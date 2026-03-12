@@ -203,7 +203,7 @@ if "net_mana" not in d:
         f.write(d)
     print("  Added net_mana to driver.c")
 
-  print("VPP patched: system DPDK + MANA whitelist + no --in-memory + xstats bypass + driver entry")
+print("VPP patched: system DPDK + MANA whitelist + no --in-memory + xstats bypass + driver entry")
 PYEOF
 
 echo "===== [8/9] Build VPP ====="

@@ -98,7 +98,7 @@ VPP registers a **global UDP listener on port 4789** for its built-in VXLAN supp
 |---|---|
 | **Symptom** | Pod can't ping anything — not even the node IP or Azure gateway. Complete network isolation |
 | **Root Cause** | Running `ethtool -K eth0 rx off tx off` disables Cilium CNI's checksum offload on the veth pair, breaking the entire CNI data path |
-| **Fix** | Delete and recreate the pod: `kubectl delete pod vpp-sriov --force && kubectl apply -f vpp-sriov.yaml` |
+| **Fix** | Delete and recreate the pod: `kubectl delete pod vpp-sriov --force && kubectl apply -f ../manifests/lab/vpp-sriov.yaml` |
 | **Prevention** | **NEVER run `ethtool -K eth0 ...`** — only modify offload on `vxlan100`, never `eth0` |
 
 ### 4. VPP Pod Lands on Wrong Node
@@ -143,11 +143,11 @@ VPP registers a **global UDP listener on port 4789** for its built-in VXLAN supp
 
 ```bash
 # Deploy VPP pod (pinned to dpdkpool node)
-kubectl apply -f vpp-sriov.yaml
+kubectl apply -f ../manifests/lab/vpp-sriov.yaml
 kubectl wait --for=condition=Ready pod/vpp-sriov --timeout=120s
 
 # Deploy client pod (same node)
-kubectl apply -f client-pod-node.yaml
+kubectl apply -f ../manifests/lab/client-pod-node.yaml
 kubectl wait --for=condition=Ready pod/client-pod --timeout=60s
 
 # Verify co-location
@@ -370,7 +370,7 @@ This happens if `ethtool -K eth0 rx off tx off` was accidentally run.
 ```bash
 # Nuclear option: delete and recreate the pod
 kubectl delete pod vpp-sriov --force --grace-period=0
-kubectl apply -f vpp-sriov.yaml
+kubectl apply -f ../manifests/lab/vpp-sriov.yaml
 kubectl wait --for=condition=Ready pod/vpp-sriov --timeout=120s
 
 # Then redo Steps 2-10 from the setup guide
@@ -384,7 +384,7 @@ echo "New VPP Pod IP: $VPP_POD_IP"
 
 ```bash
 kubectl delete pod client-pod --force --grace-period=0
-kubectl apply -f client-pod-node.yaml
+kubectl apply -f ../manifests/lab/client-pod-node.yaml
 kubectl wait --for=condition=Ready pod/client-pod --timeout=60s
 
 # Reinstall tools

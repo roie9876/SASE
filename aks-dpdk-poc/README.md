@@ -6,6 +6,10 @@ This guide outlines a **100% Open-Source and Azure-Native Proof of Concept (POC)
 
 The POC currently includes multiple experiment tracks that use different node types, NICs, and datapaths. If you want the clean separation by scenario, start here:
 
+- [START-HERE.md](./START-HERE.md) - short onboarding guide for new readers and external engineers
+- [poc-concepts-primer.md](./poc-concepts-primer.md) - terminology primer with diagrams for MANA, VPP, DPDK, and af-packet
+- [scripts/README.md](./scripts/README.md) - organized script entry points for MANA and AKS infrastructure
+- [manifests/README.md](./manifests/README.md) - Kubernetes manifests split by scenario
 - [experiments/README.md](./experiments/README.md) - experiment index
 - [experiments/d4sv5-mellanox-afpacket.md](./experiments/d4sv5-mellanox-afpacket.md) - original working functional POC on `Standard_D4s_v5` using VPP `af-packet`
 - [experiments/d4sv6-mana-dpdk.md](./experiments/d4sv6-mana-dpdk.md) - Azure MANA native DPDK investigation on `Standard_D4s_v6`
@@ -16,6 +20,19 @@ Recommended interpretation:
 - The **D4s_v5 Mellanox** scenario is the working **functional topology demo**.
 - The **D4s_v6 MANA** scenario is the active **kernel-bypass / native DPDK** investigation.
 - The **native SRv6** scenario explains why the working topology used **VXLAN encapsulation**.
+
+## Repository Layout
+
+The top level of this folder is now intentionally small:
+
+- Reader-facing documentation stays at the top level: `README.md`, `START-HERE.md`, `OPERATIONS_GUIDE.md`, `poc-concepts-primer.md`
+- Current operational scripts live under `scripts/`
+- Kubernetes manifests live under `manifests/`
+- Historical one-off MANA attempts live under `archive/mana/`
+- Internal engineering notes live under `internal/notes/`
+- Reference patch files for VPP MANA work live under `scripts/mana/patches/`
+
+If you are sharing this POC externally, start with the docs above, then use [scripts/README.md](./scripts/README.md) to find the current MANA workflow.
 
 By building this lab, you will learn how to:
 1. Orchestrate Azure Virtual WAN to route traffic.
@@ -266,7 +283,7 @@ az aks get-credentials -g $RESOURCE_GROUP -n $CLUSTER_NAME --admin
 Standard AKS dynamicaly provisions compute, but does not allocate HugePages out of the box. We apply a DaemonSet to automatically mount 2Gi Hugepages across the node pool for high-performance packet buffers.
 
 ```bash
-kubectl apply -f setup-hugepages.yaml
+kubectl apply -f ../manifests/lab/setup-hugepages.yaml
 ```
 
 ---
@@ -282,7 +299,7 @@ kubectl apply -f https://raw.githubusercontent.com/k8snetworkplumbingwg/multus-c
 kubectl rollout status daemonset/kube-multus-ds -n kube-system
 
 # Apply the logical Multus Network Attachments
-kubectl apply -f multi-net.yaml
+kubectl apply -f ../manifests/lab/multi-net.yaml
 ```
 
 *Example `multi-net.yaml`:*
@@ -338,13 +355,13 @@ spec:
 We deploy standard VPP configured to use the host `macvlan` interfaces via `k8s.v1.cni.cncf.io/networks`. Notice how we inject HugePages from the DaemonSet allocation.
 
 ```bash
-kubectl apply -f vpp-sriov.yaml
+kubectl apply -f ../manifests/lab/vpp-sriov.yaml
 kubectl wait --for=condition=Ready pod/vpp-sriov --timeout=30s
 ```
 
 *Example `vpp-sriov.yaml` Snippet:*
 
-> **Note**: The actual deployed YAML uses `ubuntu:22.04` as the base image with manual VPP package installation (`apt-get install -y vpp vpp-plugin-core`), because the `ligato/vpp-base` image may not include the specific VPP version and plugins needed for this POC. See the actual [vpp-sriov.yaml](../vpp-sriov.yaml) for the production manifest.
+> **Note**: The actual deployed YAML uses `ubuntu:22.04` as the base image with manual VPP package installation (`apt-get install -y vpp vpp-plugin-core`), because the `ligato/vpp-base` image may not include the specific VPP version and plugins needed for this POC. See the actual [vpp-sriov.yaml](../manifests/lab/vpp-sriov.yaml) for the production manifest.
 
 ```yaml
 apiVersion: v1
@@ -978,7 +995,7 @@ vpp startup.conf: dpdk { uio-driver uio_pci_generic dev b1fd:00:02.0 }
 | **IP Forwarding on VMSS NICs** | Enabled via `az vmss nic list` — verified `enableIPForwarding: true` | Node NIC accepts packets not destined for its own IP |
 | **VPP af-packet mode** | `create host-interface name net1` on macvlan interfaces | VPP processes all packets via PACKET_MMAP raw sockets |
 | **VPP MAC matching for macvlan** | `set interface mac address host-net1 <linux-mac>` | Fixes ARP resolution between VPP and macvlan peers |
-| **HugePages via linuxOsConfig** | `--linux-os-config os-config.json` with `vmNrHugepages: 1024` | 2Mi HugePages allocated on dpdkpool node (IPv4 cluster) |
+| **HugePages via linuxOsConfig** | `--linux-os-config configs/aks/os-config.json` with `vmNrHugepages: 1024` | 2Mi HugePages allocated on dpdkpool node (IPv4 cluster) |
 
 ### What Does NOT Work
 - ❌ Azure UDR routing to pod macvlan overlay IPs

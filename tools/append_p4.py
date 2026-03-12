@@ -1,4 +1,7 @@
-with open('azure_sase_poc_lab.md', 'r') as f:
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+with open(ROOT / 'docs' / 'architecture' / 'azure_sase_poc_lab.md', 'r') as f:
     content = f.read()
 
 phase_4_log = """## Phase 4: Deploying the Open-Source VPP Router 
