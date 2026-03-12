@@ -77,46 +77,56 @@ The deployment model for this POC is:
 ## Topology
 
 ```mermaid
-flowchart LR
-    subgraph Branch[Branch Side]
-        VM["Branch VM\nOuter transport: VXLAN UDP 8472\nInner payload: IPv6 plus SRH"]
-        ENCAP["SRv6 payload builder\nSID selects tenant or service path"]
-        VM --> ENCAP
+flowchart TB
+    classDef branch fill:#dbeafe,stroke:#1d4ed8,stroke-width:2px,color:#000
+    classDef tunnel fill:#e5e7eb,stroke:#4b5563,stroke-width:2px,color:#000
+    classDef aks fill:#dcfce7,stroke:#166534,stroke-width:2px,color:#000
+    classDef vpp fill:#fde68a,stroke:#92400e,stroke-width:2px,color:#000
+    classDef service fill:#fee2e2,stroke:#b91c1c,stroke-width:2px,color:#000
+    classDef mgmt fill:#ede9fe,stroke:#6d28d9,stroke-width:2px,color:#000
+
+    subgraph branches [Branch Side]
+        BRANCH_VM["Branch VM\neth0: branch underlay\nvxlan100: tunnel endpoint"]:::branch
+        SRV6_ENCAP["SRv6 encap\nInner payload carries tenant or service context\nOuter transport stays VXLAN UDP 8472"]:::branch
+        BRANCH_VM --> SRV6_ENCAP
     end
 
-    subgraph Azure[Azure Transport]
-        FABRIC["Azure SDN\nRoutes the outer IPv4 or UDP packet\nDoes not carry clear native SRv6 for this POC"]
+    subgraph overlay [Azure Transport]
+        VXLAN_TUNNEL["VXLAN overlay over Azure SDN\nAzure routes only the outer packet\nClear native SRv6 is not used"]:::tunnel
+        SRV6_ENCAP --> VXLAN_TUNNEL
     end
 
-    subgraph Node[AKS Dataplane Node]
-        ETH0["eth0\nAKS management path\nAzure CNI Overlay plus Cilium"]
-        ETH1["eth1\nDataplane NIC\nMANA investigation track"]
+    subgraph node [AKS Dataplane Node]
+        NODE_ETH0["Node eth0\nAKS management path\nAzure CNI Overlay plus Cilium"]:::mgmt
+        NODE_ETH1["Node eth1\nDataplane NIC\nDedicated for the POC dataplane track"]:::aks
 
-        subgraph VPPPod[VPP Node-Local Forwarder]
-            VXLAN["VXLAN decap interface\nOuter tunnel terminated here"]
-            SRV6["VPP SRv6 lookup\nLocalSID or VRF decision"]
-            CHAIN["Static forwarding or chaining\nSame node first"]
+        subgraph vppnode [VPP Node-Local Forwarder]
+            VPP_DS["VPP privileged DaemonSet pod\nhostNetwork plus hugepages plus host mounts"]:::vpp
+            VXLAN_DECAP["VXLAN decap interface\nOuter tunnel terminates here"]:::vpp
+            SRV6_LOOKUP["SRv6 lookup\nLocalSID or VRF decision"]:::vpp
+            CHAIN["Static forwarding and chaining\nSame node first"]:::vpp
+
+            VPP_DS --> VXLAN_DECAP
+            VXLAN_DECAP --> SRV6_LOOKUP
+            SRV6_LOOKUP --> CHAIN
         end
 
-        subgraph Pods[Fake SASE Service Pods]
-            PODA["Pod A\neth0 mgmt\nnet1 dataplane"]
-            PODB["Pod B\neth0 mgmt\nnet1 dataplane"]
-            EGRESS["Egress or drop\nStatic action for Phase 1"]
+        subgraph svc [Fake SASE Service Pods]
+            POD_A["Service Pod A\neth0: mgmt\nnet1: dataplane"]:::service
+            POD_B["Service Pod B\neth0: mgmt\nnet1: dataplane"]:::service
+            EGRESS["Egress or drop\nStatic Phase 1 action"]:::service
         end
     end
 
-    ENCAP --> FABRIC
-    FABRIC --> VXLAN
-    ETH0 -. mgmt only .-> PODA
-    ETH0 -. mgmt only .-> PODB
-    ETH1 --> VXLAN
-    VXLAN --> SRV6
-    SRV6 --> CHAIN
-    CHAIN --> PODA
-    CHAIN --> PODB
+    VXLAN_TUNNEL --> VXLAN_DECAP
+    NODE_ETH1 --> VPP_DS
+    NODE_ETH0 -. mgmt only .-> POD_A
+    NODE_ETH0 -. mgmt only .-> POD_B
+    CHAIN --> POD_A
+    CHAIN --> POD_B
     CHAIN --> EGRESS
-    PODA --> CHAIN
-    PODB --> CHAIN
+    POD_A --> CHAIN
+    POD_B --> CHAIN
 ```
 
 ## First Success Criteria
