@@ -2,6 +2,12 @@
 
 The main architecture and background documents for this repository live here.
 
+## `requirements/`
+
+Customer requirement capture documents used to confirm scope and assumptions before locking design choices.
+
+- `requirements/README.md` - current requirement summary and open questions for the Azure SASE design phase
+
 ## `education/`
 
 Introductory and foundational material for readers who need context before diving into the architecture or the POC.
