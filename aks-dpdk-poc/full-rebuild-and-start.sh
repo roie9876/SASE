@@ -58,9 +58,43 @@ echo "===== [5/9] Allocate hugepages ====="
 echo 1024 | tee /sys/devices/system/node/node*/hugepages/hugepages-2048kB/nr_hugepages > /dev/null
 grep HugePages_Total /proc/meminfo
 
+MANA_PCI=7870:00:00.0
+MANA_MAC=7c:ed:8d:25:e4:4d
+
+find_mana_pair() {
+  local vf_if primary_if
+
+  vf_if=$(ip -o link | awk -v mac="$MANA_MAC" '$0 ~ mac && $2 ~ /^enP/ { gsub(":", "", $2); print $2; exit }')
+  if [ -z "$vf_if" ]; then
+    vf_if=$(ip -o link | awk -v mac="$MANA_MAC" '$0 ~ mac { gsub(":", "", $2); print $2; exit }')
+  fi
+
+  if [ -n "$vf_if" ]; then
+    primary_if=$(ip -o link show "$vf_if" 2>/dev/null | sed -n 's/.* master \([^ ]*\) .*/\1/p')
+  fi
+
+  echo "$primary_if;$vf_if"
+}
+
+release_mana_pair() {
+  local primary_if vf_if
+
+  IFS=';' read -r primary_if vf_if <<EOF
+$(find_mana_pair)
+EOF
+
+  echo "Releasing MANA pair: primary=${primary_if:-unknown} vf=${vf_if:-unknown}"
+  if [ -n "$primary_if" ]; then
+    ip link set "$primary_if" down 2>/dev/null || true
+  fi
+  if [ -n "$vf_if" ]; then
+    ip link set "$vf_if" down 2>/dev/null || true
+  fi
+}
+
 echo "===== [6/9] Verify DPDK MANA testpmd ====="
 rm -rf /var/run/dpdk
-ip link set enP30832s1d1 down 2>/dev/null || true
+release_mana_pair
 timeout 15 dpdk-testpmd -l 0-1 \
     -a 7870:00:00.0,mac=7c:ed:8d:25:e4:4d \
     --iova-mode va -m 512 \
@@ -126,10 +160,30 @@ if '--in-memory' in c and '/* MANA fix' not in c:
     )
     print("  Removed --in-memory from EAL args")
 
+# Patch 3: Skip DPDK xstats for MANA to avoid VPP counter crash during admin-up
+mana_xstats = '  if (xd->if_desc && strstr (xd->if_desc, "Microsoft Azure MANA"))\n    return;\n'
+if mana_xstats not in c:
+  c = c.replace(
+    '  int len, ret, i;\n  struct rte_eth_xstat_name *xstats_names = 0;\n',
+    '  int len, ret, i;\n  struct rte_eth_xstat_name *xstats_names = 0;\n\n  if (xd->if_desc && strstr (xd->if_desc, "Microsoft Azure MANA"))\n    return;\n'
+  )
+  print("  Added MANA xstats bypass in init.c")
+
 with open("src/plugins/dpdk/device/init.c", "w") as f:
     f.write(c)
 
-# Patch 3: Add MANA to VPP driver classification table
+with open("src/plugins/dpdk/device/dpdk_priv.h", "r") as f:
+  p = f.read()
+if mana_xstats not in p:
+  p = p.replace(
+    '  if (!(xd->flags & DPDK_DEVICE_FLAG_ADMIN_UP))\n    return;\n',
+    '  if (!(xd->flags & DPDK_DEVICE_FLAG_ADMIN_UP))\n    return;\n\n  if (xd->if_desc && strstr (xd->if_desc, "Microsoft Azure MANA"))\n    return;\n'
+  )
+  with open("src/plugins/dpdk/device/dpdk_priv.h", "w") as f:
+    f.write(p)
+  print("  Added MANA xstats bypass in dpdk_priv.h")
+
+# Patch 4: Add MANA to VPP driver classification table
 with open("src/plugins/dpdk/device/driver.c", "r") as f:
     d = f.read()
 if "net_mana" not in d:
@@ -149,7 +203,7 @@ if "net_mana" not in d:
         f.write(d)
     print("  Added net_mana to driver.c")
 
-print("VPP patched: system DPDK + MANA whitelist + no --in-memory + driver entry")
+  print("VPP patched: system DPDK + MANA whitelist + no --in-memory + xstats bypass + driver entry")
 PYEOF
 
 echo "===== [8/9] Build VPP ====="
@@ -217,7 +271,7 @@ with open('/etc/vpp/startup.conf', 'w') as f:
     f.write(conf)
 "
 
-ip link set enP30832s1d1 down 2>/dev/null || true
+release_mana_pair
 echo "Starting VPP..."
 vpp -c /etc/vpp/startup.conf &
 VPP_PID=$!

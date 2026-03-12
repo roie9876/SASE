@@ -28,10 +28,36 @@ ip -br link show enP30832s1d1 2>&1 | sed 's/^/    /'
 echo "  IB devices:"
 ls /dev/infiniband/ 2>&1 | sed 's/^/    /'
 
+MANA_MAC=7c:ed:8d:25:e4:4d
+
+find_mana_pair() {
+  local vf_if primary_if
+
+  vf_if=$(ip -o link | awk -v mac="$MANA_MAC" '$0 ~ mac && $2 ~ /^enP/ { gsub(":", "", $2); print $2; exit }')
+  if [ -z "$vf_if" ]; then
+    vf_if=$(ip -o link | awk -v mac="$MANA_MAC" '$0 ~ mac { gsub(":", "", $2); print $2; exit }')
+  fi
+
+  if [ -n "$vf_if" ]; then
+    primary_if=$(ip -o link show "$vf_if" 2>/dev/null | sed -n 's/.* master \([^ ]*\) .*/\1/p')
+  fi
+
+  echo "$primary_if;$vf_if"
+}
+
 echo ""
 echo "[3] Prepare MANA VF..."
-ip link set enP30832s1d1 down 2>/dev/null
-echo "  enP30832s1d1 set DOWN"
+IFS=';' read -r MANA_PRIMARY_IF MANA_VF_IF <<EOF
+$(find_mana_pair)
+EOF
+echo "  primary=${MANA_PRIMARY_IF:-unknown} vf=${MANA_VF_IF:-unknown}"
+if [ -n "$MANA_PRIMARY_IF" ]; then
+  ip link set "$MANA_PRIMARY_IF" down 2>/dev/null || true
+fi
+if [ -n "$MANA_VF_IF" ]; then
+  ip link set "$MANA_VF_IF" down 2>/dev/null || true
+fi
+echo "  MANA synthetic/VF pair set DOWN"
 
 echo ""
 echo "[4] Test DPDK with PCI scan (allow-list MANA)..."

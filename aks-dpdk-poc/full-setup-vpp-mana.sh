@@ -46,6 +46,39 @@ echo "===== [5/8] Allocate hugepages ====="
 echo 1024 | tee /sys/devices/system/node/node*/hugepages/hugepages-2048kB/nr_hugepages > /dev/null
 grep HugePages_Total /proc/meminfo
 
+MANA_MAC=7c:ed:8d:25:e4:4d
+
+find_mana_pair() {
+  local vf_if primary_if
+
+  vf_if=$(ip -o link | awk -v mac="$MANA_MAC" '$0 ~ mac && $2 ~ /^enP/ { gsub(":", "", $2); print $2; exit }')
+  if [ -z "$vf_if" ]; then
+    vf_if=$(ip -o link | awk -v mac="$MANA_MAC" '$0 ~ mac { gsub(":", "", $2); print $2; exit }')
+  fi
+
+  if [ -n "$vf_if" ]; then
+    primary_if=$(ip -o link show "$vf_if" 2>/dev/null | sed -n 's/.* master \([^ ]*\) .*/\1/p')
+  fi
+
+  echo "$primary_if;$vf_if"
+}
+
+release_mana_pair() {
+  local primary_if vf_if
+
+  IFS=';' read -r primary_if vf_if <<EOF
+$(find_mana_pair)
+EOF
+
+  echo "Releasing MANA pair: primary=${primary_if:-unknown} vf=${vf_if:-unknown}"
+  if [ -n "$primary_if" ]; then
+    ip link set "$primary_if" down 2>/dev/null || true
+  fi
+  if [ -n "$vf_if" ]; then
+    ip link set "$vf_if" down 2>/dev/null || true
+  fi
+}
+
 echo "===== [6/8] Re-apply MANA VPP patch + rebuild ====="
 if [ -d /host/tmp/vpp-source-backup ]; then
     echo "Using backed up VPP source"
@@ -101,6 +134,27 @@ if "0x1414" not in content:
     print("MANA patch applied")
 else:
     print("MANA patch already present")
+
+  mana_xstats = '  if (xd->if_desc && strstr (xd->if_desc, "Microsoft Azure MANA"))\n    return;\n'
+  if mana_xstats not in content:
+    content = content.replace(
+      '  int len, ret, i;\n  struct rte_eth_xstat_name *xstats_names = 0;\n',
+      '  int len, ret, i;\n  struct rte_eth_xstat_name *xstats_names = 0;\n\n  if (xd->if_desc && strstr (xd->if_desc, "Microsoft Azure MANA"))\n    return;\n'
+    )
+    with open("src/plugins/dpdk/device/init.c", "w") as f:
+      f.write(content)
+    print("MANA xstats bypass added to init.c")
+
+  with open("src/plugins/dpdk/device/dpdk_priv.h", "r") as f:
+    priv = f.read()
+  if mana_xstats not in priv:
+    priv = priv.replace(
+      '  if (!(xd->flags & DPDK_DEVICE_FLAG_ADMIN_UP))\n    return;\n',
+      '  if (!(xd->flags & DPDK_DEVICE_FLAG_ADMIN_UP))\n    return;\n\n  if (xd->if_desc && strstr (xd->if_desc, "Microsoft Azure MANA"))\n    return;\n'
+    )
+    with open("src/plugins/dpdk/device/dpdk_priv.h", "w") as f:
+      f.write(priv)
+    print("MANA xstats bypass added to dpdk_priv.h")
 PYEOF
 
 # Check if VPP was already built (in tarball)
@@ -134,7 +188,7 @@ echo "===== [7/8] Verify DPDK MANA with testpmd ====="
 pkill -9 testpmd 2>/dev/null || true
 rm -rf /var/run/dpdk
 sleep 1
-ip link set enP30832s1d1 down 2>/dev/null || true
+release_mana_pair
 timeout 15 dpdk-testpmd -l 0-1 \
     -a 7870:00:00.0,mac=7c:ed:8d:25:e4:4d \
     --iova-mode va -m 512 \

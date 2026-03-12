@@ -152,7 +152,7 @@ next_device:
 6. **VPP spinning at 100% CPU**: VPP's DPDK polling loop starves the CLI. **Fix**: Add `poll-sleep-usec 100` to `unix {}` section of startup.conf
 7. **DPDK failsafe/netvsc PMDs hijack MANA**: Even with system DPDK built correctly, the `net_failsafe`/`net_tap`/`net_netvsc` PMD .so files intercept the MANA device. **Fix**: Delete `librte_net_{failsafe,tap,netvsc,vdev_netvsc}*` from `dpdk/pmds-25.0/`
 8. **VPP unknown driver 'net_mana'**: VPP v26.02 doesn't have MANA in its driver table. **Fix**: Add entry to `src/plugins/dpdk/device/driver.c`. Triggers SIGSEGV on `show hardware-interfaces mana0` without the patch.
-9. **CURRENT BLOCKER: VPP SIGSEGV in dpdk_counters_xstats_init()**: When `set interface state mana0 up` executes, VPP calls `dpdk_interface_admin_up_down()` → `dpdk_counters_xstats_init()` → `vlib_validate_simple_counter()` → `vlib_stats_validate()` → SIGSEGV at address 0x7aa2a4b35ab0. The log shows `rte_eth_xstats_get(0) returned 8/0 stats` right before crash, suggesting a stats counter size mismatch. The underlying `rte_eth_dev_start()` may have also failed with -22 (from `mana_start_tx_queues` CQ creation), and the xstats init path crashes on the partially-initialized device. Fixing this likely requires either: (a) patching VPP's dpdk_counters_xstats_init to handle MANA's stats, (b) ensuring rte_eth_dev_configure() properly sets up queues before start, or (c) setting `n_rx_desc` and `n_tx_desc` to match MANA's limits (128 worked in testpmd).
+9. **CURRENT STATUS: `mana0` comes UP after MANA-specific xstats bypass**: A minimal VPP DPDK profile (`num-rx-desc 128`, `num-tx-desc 128`, `no-tx-checksum-offload`, `no-multi-seg`) plus a VPP patch that skips `dpdk_counters_xstats_init()`/`dpdk_get_xstats()` for `Microsoft Azure MANA` allows `set interface state mana0 up` to succeed. The prior SIGSEGV path (`rte_eth_xstats_get(0) returned 8/0 stats`) is avoided. Current runtime shows `mana0` admin-up with `10.120.3.10/24`, CPU ~14%, and no crash. Residual concern: `show hardware-interfaces` still reports `rx: queues 0`, `tx: queues 0`, and burst functions `(not available)`, so dataplane traffic is not yet validated.
 
 ## MANA Interface Details
 - **PCI**: `7870:00:00.0` (vendor 1414, device 00ba)
@@ -249,11 +249,11 @@ The old netvsc unbind procedure below is **NOT required** and causes eth1 to dis
 | `aks-dpdk-poc/Dockerfile.vpp-mana` | Multi-stage Docker build (needs failsafe PMD removal step) |
 
 ## Next Steps
-1. **Fix `rte_eth_dev_start()` -22 error** — testpmd works with 128 desc, VPP uses 1024. Investigate VPP queue setup vs MANA limits
-2. **Fix SIGSEGV in `dpdk_counters_xstats_init()`** — patch xstats path or fix root cause (dev_start failure)
+1. **Validate actual dataplane traffic with `mana0` admin-up** — direct ping/ARP from branch VM to `10.120.3.10`
+2. Confirm whether queue/burst reporting is cosmetic or indicates RX/TX is still not functional
 3. Set up VXLAN tunnel: branch-vm (10.120.4.4) → VPP pod
 4. E2E traffic test: ping + iperf3 through VPP DPDK
-5. Update Dockerfile with all fixes (cgroup, rdma-core v46, VPP patches, failsafe PMD removal)
+5. Update Dockerfile with all fixes (cgroup, rdma-core v46, VPP patches, failsafe PMD removal, MANA xstats bypass)
 6. Build Docker image to ACR
 
 ## Other Clusters (can be deleted to save cost)

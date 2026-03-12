@@ -45,6 +45,24 @@ if ls /usr/local/lib/x86_64-linux-gnu/dpdk/pmds-25.0/librte_net_failsafe* 2>/dev
 fi
 echo "  MANA: $(ls /usr/local/lib/x86_64-linux-gnu/dpdk/pmds-25.0/librte_net_mana.so 2>/dev/null || echo MISSING)"
 
+MANA_PCI=7870:00:00.0
+MANA_MAC=7c:ed:8d:25:e4:4d
+
+find_mana_pair() {
+  local vf_if primary_if
+
+  vf_if=$(ip -o link | awk -v mac="$MANA_MAC" '$0 ~ mac && $2 ~ /^enP/ { gsub(":", "", $2); print $2; exit }')
+  if [ -z "$vf_if" ]; then
+    vf_if=$(ip -o link | awk -v mac="$MANA_MAC" '$0 ~ mac { gsub(":", "", $2); print $2; exit }')
+  fi
+
+  if [ -n "$vf_if" ]; then
+    primary_if=$(ip -o link show "$vf_if" 2>/dev/null | sed -n 's/.* master \([^ ]*\) .*/\1/p')
+  fi
+
+  echo "$primary_if;$vf_if"
+}
+
 # --- Install VPP ---
 echo "[6] Installing VPP binaries..."
 VPP_DIR=/tmp/vpp/build-root/install-vpp-native/vpp
@@ -59,9 +77,18 @@ fi
 ldconfig
 echo "  VPP: $(vpp --version 2>&1 | head -1)"
 
-# --- VF down ---
-echo "[7] Setting enP30832s1d1 DOWN..."
-ip link set enP30832s1d1 down 2>/dev/null || true
+# --- Release synthetic + VF pair ---
+echo "[7] Releasing MANA synthetic/VF pair..."
+IFS=';' read -r MANA_PRIMARY_IF MANA_VF_IF <<EOF
+$(find_mana_pair)
+EOF
+echo "  primary=${MANA_PRIMARY_IF:-unknown} vf=${MANA_VF_IF:-unknown}"
+if [ -n "$MANA_PRIMARY_IF" ]; then
+  ip link set "$MANA_PRIMARY_IF" down 2>/dev/null || true
+fi
+if [ -n "$MANA_VF_IF" ]; then
+  ip link set "$MANA_VF_IF" down 2>/dev/null || true
+fi
 
 # --- Write VPP config ---
 echo "[8] Writing VPP config..."
@@ -84,7 +111,11 @@ dpdk {
     devargs mac=7c:ed:8d:25:e4:4d
     num-rx-queues 1
     num-tx-queues 1
+    num-rx-desc 128
+    num-tx-desc 128
   }
+  no-tx-checksum-offload
+  no-multi-seg
   iova-mode va
   uio-driver auto
 }

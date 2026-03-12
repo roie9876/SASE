@@ -2,6 +2,21 @@
 
 This guide outlines a **100% Open-Source and Azure-Native Proof of Concept (POC)** designed to teach the mechanics of High-Performance Kubernetes Networking (SR-IOV, DPDK, and Kernel Bypass) without requiring commercial licenses like Check Point's SASE software.
 
+## POC Scenario Map
+
+The POC currently includes multiple experiment tracks that use different node types, NICs, and datapaths. If you want the clean separation by scenario, start here:
+
+- [experiments/README.md](./experiments/README.md) - experiment index
+- [experiments/d4sv5-mellanox-afpacket.md](./experiments/d4sv5-mellanox-afpacket.md) - original working functional POC on `Standard_D4s_v5` using VPP `af-packet`
+- [experiments/d4sv6-mana-dpdk.md](./experiments/d4sv6-mana-dpdk.md) - Azure MANA native DPDK investigation on `Standard_D4s_v6`
+- [experiments/native-srv6-azure-fabric.md](./experiments/native-srv6-azure-fabric.md) - direct SRv6-in-Azure-fabric test
+
+Recommended interpretation:
+
+- The **D4s_v5 Mellanox** scenario is the working **functional topology demo**.
+- The **D4s_v6 MANA** scenario is the active **kernel-bypass / native DPDK** investigation.
+- The **native SRv6** scenario explains why the working topology used **VXLAN encapsulation**.
+
 By building this lab, you will learn how to:
 1. Orchestrate Azure Virtual WAN to route traffic.
 2. Set up AKS with compute-optimized node pools capable of Accelerated Networking.
@@ -11,6 +26,15 @@ By building this lab, you will learn how to:
 6. **Configure SRv6 segment routing** for multi-tenant traffic isolation with overlapping IPs.
 7. **Forward traffic at 100 Mbps+ with 0% packet loss** through VPP's L3 routing engine.
 8. **Run DPDK testpmd on MANA** inside an AKS pod using Ubuntu 24.04, kernel 6.8, and Standard_D4s_v6.
+
+## Current MANA POC Status
+
+As of March 12, 2026, the **native DPDK MANA kernel-bypass path is proven**, but the **full VPP-on-MANA kernel-bypass POC is not working yet**.
+
+- **Working**: AKS on Ubuntu 24.04, kernel 6.8, MANA NIC discovery, `rdma-core` v46, DPDK v24.11, and native `dpdk-testpmd` on `net_mana`.
+- **Partially working**: VPP can detect the device as `mana0`, and the plugin patches prevent the earlier unknown-driver and xstats crash paths.
+- **Not working**: VPP does not reliably bring `mana0` fully up with usable RX/TX queues and real burst functions, so end-to-end dataplane traffic through native MANA is still unproven.
+- **Current conclusion**: This POC successfully proves the Azure MANA + DPDK layer, but it does **not** yet prove production-usable VPP dataplane forwarding over native MANA.
 
 ### Table of Contents
 1. [Architecture Topology](#architecture-topology)
@@ -26,7 +50,7 @@ By building this lab, you will learn how to:
 11. [TCP Checksum Deep Dive](#tcp-checksum-issue-deep-dive)
 12. [af-packet vs DPDK](#af-packet-vs-dpdk-why-production-needs-dpdk)
 13. [Azure AKS Lessons Learned](#lessons-learned-from-azure-aks)
-14. [MANA DPDK on AKS: Breakthrough](#mana-dpdk-on-aks-breakthrough)
+14. [MANA DPDK on AKS: Current Status](#mana-dpdk-on-aks-current-status)
 15. [Native SRv6 Test](#native-srv6-test-azure-drops-srh-extension-headers)
 16. [MTU / Jumbo Frame Test](#mtu--jumbo-frame-test-azure-supports-up-to-4028-bytes)
 
@@ -92,6 +116,8 @@ By building this lab, you will learn how to:
 | iperf3 UDP 100 Mbps | **0% loss, 0.338ms jitter** | Full path through VPP af-packet |
 | iperf3 TCP | **Fails** (checksum issue) | Known af-packet limitation — see [TCP Checksum Deep Dive](#tcp-checksum-issue-deep-dive) |
 | VPP SRv6 localsid processing | **23+ packets processed** | End.DT4 decap with per-customer VRF selection |
+| Native DPDK `testpmd` on Azure MANA | **Works** | AKS Ubuntu 24.04 → MANA `net_mana` → `dpdk-testpmd` |
+| Native VPP on Azure MANA | **Not working yet** | `mana0` is detected, but VPP does not reliably expose functional queues / dataplane |
 
 ```mermaid
 graph TD
@@ -959,7 +985,8 @@ vpp startup.conf: dpdk { uio-driver uio_pci_generic dev b1fd:00:02.0 }
 - ❌ DPDK on AKS with **Ubuntu 22.04 / kernel 5.15** (backported `mana_ib` is broken — `ibv_reg_mr()` returns EPROTO)
 - ❌ DPDK on AKS with **AzureLinux / kernel 6.6** (`CONFIG_MANA_INFINIBAND` disabled in kernel config)
 - ❌ DPDK on AKS with **Mellanox ConnectX** (Azure blocks VF PCI passthrough from `mlx5_core` to `vfio-pci`)
-- ✅ **DPDK on AKS with Ubuntu 24.04 / kernel 6.8 + MANA — WORKS!** (see [MANA DPDK on AKS](#mana-dpdk-on-aks-breakthrough))
+- ✅ **DPDK on AKS with Ubuntu 24.04 / kernel 6.8 + MANA — works** (see [MANA DPDK on AKS](#mana-dpdk-on-aks-current-status))
+- ❌ **VPP native kernel-bypass on Azure MANA — not working yet** (`mana0` is discovered, but admin-up and usable dataplane queues are not stable)
 - ❌ L2 macvlan between pods on different nodes
 - ❌ Modifying eth0 checksum offload (breaks Cilium)
 - ❌ VPP native VXLAN on port 4789 (conflicts with af-packet Linux VXLAN)
@@ -967,11 +994,25 @@ vpp startup.conf: dpdk { uio-driver uio_pci_generic dev b1fd:00:02.0 }
 
 ---
 
-## MANA DPDK on AKS: Breakthrough
+## MANA DPDK on AKS: Current Status
 
 ### TL;DR
 
-**DPDK with MANA works on AKS** when using the right combination:
+**What is proven:** native DPDK with Azure MANA works on AKS when using the right combination.
+
+**What is not proven:** the full FD.io VPP native kernel-bypass dataplane on top of Azure MANA is still not working reliably.
+
+The latest state is:
+
+| Layer | Status | Notes |
+|------|--------|------|
+| Azure VM / AKS node platform | **Working** | Ubuntu 24.04 + kernel 6.8 + `Standard_D4s_v6` consistently exposes MANA correctly |
+| `rdma-core` + MANA userspace | **Working** | `rdma-core` v46 resolves the required `libmana` / `MLX5_1.24` dependency chain |
+| DPDK `net_mana` PMD | **Working** | `dpdk-testpmd` runs natively against MANA with the expected MAC and 100 Gbps link |
+| VPP device discovery | **Working** | VPP sees `mana0` instead of the old failsafe path after PMD cleanup and driver table patching |
+| VPP admin-up path | **Unstable / failing** | Some patched runs progressed further, but clean runs still regress to interface start failures such as `-19` |
+| VPP usable dataplane queues | **Not working** | Hardware output still shows `rx queues 0`, `tx queues 0`, and dummy burst functions in the failing state |
+| End-to-end traffic through VPP on native MANA | **Not validated** | No trustworthy ping or forwarding proof yet |
 
 | Component | Required Value |
 |-----------|---------------|
@@ -982,7 +1023,7 @@ vpp startup.conf: dpdk { uio-driver uio_pci_generic dev b1fd:00:02.0 }
 | **rdma-core** | v46+ (built from source for `libmana` provider) |
 | **NIC Setup** | Dual NIC: eth0 for K8s, eth1 for DPDK |
 
-### Why This Combination — And Why Others Fail
+### What We Learned
 
 Microsoft's [MANA DPDK documentation](https://learn.microsoft.com/en-us/azure/virtual-network/setup-dpdk-mana#dpdk-requirements-for-mana) lists 4 requirements:
 
@@ -999,6 +1040,23 @@ Requirement #2 is the critical one. We tested 3 OS + kernel combinations:
 | 2 | AzureLinux 3.0 | 6.6.121.1-1.azl3 | `CONFIG_MANA_INFINIBAND` **disabled** in kernel config | Module doesn't exist |
 | 3 | **Ubuntu 24.04** | **6.8.0-1046-azure** | **Built-in, auto-loaded** | **DPDK port 0 probed, queues created, testpmd runs!** |
 
+Additional findings from the current VPP integration work:
+
+1. DPDK PMD cleanup is mandatory. `failsafe`, `tap`, `netvsc`, and `vdev_netvsc` PMDs can hijack the device before `net_mana` binds.
+2. VPP must be built against **system DPDK**, not the bundled external DPDK, and the rebuilt `dpdk_plugin.so` must be copied from the build tree.
+3. Azure MANA behaves as a **bifurcated** driver model here. The synthetic interface and its VF pair must both be brought down before starting DPDK.
+4. A MANA-specific VPP xstats bypass avoided the earlier counter crash, but it did not solve the deeper queue / dataplane bring-up problem.
+5. At least one run showed `mana0` up with `10.120.3.10/24`, but the hardware state still did not expose real queues or burst handlers, so it cannot be treated as a successful dataplane bring-up.
+
+### Current Technical Interpretation
+
+The evidence so far points to this boundary:
+
+- **Azure MANA + DPDK** is real and repeatable.
+- **Azure MANA + VPP's DPDK plugin path** is still incompatible or incomplete in this setup.
+
+At this stage, the POC should be treated as a successful **DPDK-on-MANA validation**, but an unsuccessful **VPP-on-MANA kernel-bypass validation**.
+
 ### The MANA DPDK Architecture on AKS
 
 ```
@@ -1008,8 +1066,8 @@ Requirement #2 is the critical one. We tested 3 OS + kernel combinations:
 │  eth0 (K8s mgmt)          eth1 (DPDK data plane)               │
 │    │                        │                                   │
 │    ├─ enP30832s1 (MANA VF)  ├─ enP30832s1d1 (MANA VF)         │
-│    │  MAC: 7c:1e:52:...     │  MAC: 60:45:bd:...               │
-│    │  driver: hv_netvsc     │  driver: uio_hv_generic (DPDK)   │
+│    │  MAC: 7c:1e:52:...     │  MAC: 7c:ed:8d:25:e4:4d          │
+│    │  kernel-managed        │  kernel-managed, set DOWN        │
 │    │                        │                                   │
 │    │  PCI: 7870:00:00.0     │  PCI: 7870:00:00.0 (same device) │
 │    │  IB: mana_0/uverbs0    │  IB: manae_0/uverbs1             │
@@ -1123,30 +1181,25 @@ cd dpdk && meson build && cd build && ninja && ninja install && ldconfig
 dpdk-testpmd --help  # Should work without errors
 ```
 
-#### Step 5: Bind eth1 and Run testpmd
+#### Step 5: Release the MANA pair and Run `testpmd`
 
 ```bash
-# Get MANA interface details
-SECONDARY=$(ip -br link show master eth1 | awk '{ print $1 }')
-MANA_MAC=$(ip -br link show master eth1 | awk '{ print $3 }')
-BUS_INFO=$(ethtool -i $SECONDARY | grep bus-info | awk '{ print $2 }')
-DEV_UUID=$(basename $(readlink /sys/class/net/eth1/device))
+# Escape the pod cgroup so hugepages work
+echo $$ > /sys/fs/cgroup/cgroup.procs
 
-# Set eth1 DOWN (critical!)
+# Allocate hugepages
+echo 1024 > /sys/devices/system/node/node*/hugepages/hugepages-2048kB/nr_hugepages
+
+# Find the MANA VF paired to eth1 and bring both interfaces down
+MANA_MAC=7c:ed:8d:25:e4:4d
+VF_IF=$(ip -o link | awk -v mac="$MANA_MAC" '$0 ~ mac && $2 ~ /^enP/ { gsub(":", "", $2); print $2; exit }')
 ip link set eth1 down
-ip link set $SECONDARY down
+ip link set "$VF_IF" down
 
-# Bind netvsc to uio_hv_generic
-modprobe uio_hv_generic
-NET_UUID="f8615163-df3e-46c5-913f-f2d2f965ed0e"
-echo $NET_UUID > /sys/bus/vmbus/drivers/uio_hv_generic/new_id
-echo $DEV_UUID > /sys/bus/vmbus/drivers/hv_netvsc/unbind
-echo $DEV_UUID > /sys/bus/vmbus/drivers/uio_hv_generic/bind
-
-# Run testpmd
-dpdk-testpmd -l 0-1 --no-huge -m 512 --iova-mode va \
-  --vdev="$BUS_INFO,mac=$MANA_MAC" \
-  -- --forward-mode=txonly --auto-start --txd=128 --rxd=128 --stats 2
+# Run testpmd natively against the MANA PCI device
+dpdk-testpmd -l 0-1 -a 7870:00:00.0,mac=$MANA_MAC \
+  --iova-mode va -m 512 \
+  -- --auto-start --txd=128 --rxd=128
 ```
 
 **Expected output:**
@@ -1161,24 +1214,37 @@ port 0: RX queue number: 1 Tx queue number: 1
 
 ### Key Differences: MANA vs Mellanox DPDK
 
-| Aspect | Mellanox ConnectX (old) | MANA (new) |
-|--------|------------------------|------------|
+| Aspect | Mellanox ConnectX (old) | MANA (current working path) |
+|--------|------------------------|-----------------------------|
 | PCI ID | `15b3:101a` | `1414:00ba` |
-| DPDK PMD | `mlx5` (bound by PCI address) | `net_mana` (bound by **MAC address**) |
-| EAL args | `--allow <pci_addr>` | `--vdev="<bus_info>,mac=<MAC>"` |
-| Kernel driver for DPDK | `vfio-pci` or `uio_pci_generic` | `uio_hv_generic` (for netvsc channel) |
+| DPDK PMD | `mlx5` | `net_mana` |
+| EAL args | `--allow <pci_addr>` | `-a <pci_addr>,mac=<MAC>` |
+| Driver model | PCI binding to user-space driver | **Bifurcated**: kernel MANA + rdma-core + DPDK PMD |
+| Kernel driver for test | often `vfio-pci` | keep kernel MANA path loaded; just set the synthetic/VF pair DOWN |
 | IB/RDMA kernel module | `mlx5_ib` | `mana_ib` (requires kernel 6.2+) |
-| VF passthrough | Azure blocks PCI unbind | Works via netvsc → `uio_hv_generic` |
 | VM SKU guarantee | v5 may get Mellanox or MANA | **v6-series always gets MANA** |
 
 ### Known Limitations
 
 | Issue | Details | Workaround |
 |-------|---------|------------|
-| **HugePages in K8s pods** | K8s cgroup blocks hugetlb allocation unless pod requests `hugepages-2Mi` resource, but AKS nodes report 0 allocatable hugepages | Use `--no-huge -m 512` for testing; in production, pre-allocate hugepages via `--linux-os-config` before cluster creation |
-| **eth1 requires VMSS restart** | After binding eth1 to `uio_hv_generic`, the netvsc synthetic is removed. Undoing this requires a VMSS restart | Design pods to bind eth1 at startup and keep it bound |
-| **`uio_hv_generic` module on Ubuntu 24.04** | Module exists on host but not in container `/lib/modules` | Use `chroot /host modprobe uio_hv_generic` from privileged pod |
-| **TX-packets: 0 with `--no-huge`** | Limited memory with `--no-huge` may result in 0 traffic | Use proper hugepages for production traffic |
+| **HugePages in K8s pods** | The pod cgroup blocks hugetlb access unless the process escapes to the root cgroup | Use `echo $$ > /sys/fs/cgroup/cgroup.procs` before running DPDK or VPP |
+| **Wrong PMDs hijack MANA** | `failsafe`, `tap`, `netvsc`, and `vdev_netvsc` can capture the device before `net_mana` | Remove those PMDs from the DPDK PMD directory before testing |
+| **VPP MANA startup is unstable** | `mana0` may be detected, but clean starts still regress to interface start failures and no functional RX/TX queues | Treat the current state as not working; do not claim dataplane success yet |
+| **Pod state gets contaminated during repeated tests** | Repeated failed VPP runs leave stale processes and sockets, making later CLI and ping tests unreliable | Recreate the pod before any serious validation attempt |
+
+### Recommended Next Steps
+
+1. Stop treating this as a generic pod or AKS issue. The unresolved problem is specifically the **VPP + Azure MANA DPDK integration path**.
+2. Decide whether to keep investing in native VPP-on-MANA or pivot to a supported alternative for the dataplane POC.
+3. If continuing with native VPP-on-MANA, the next work should focus on queue bring-up and `rte_eth_dev_start()` behavior inside VPP, not on Kubernetes routing.
+4. In parallel, preserve the current result as a success for **native DPDK on Azure MANA**, because that part is already proven.
+
+Practical options for the next phase:
+
+- **Option A: Deep VPP debugging**. Instrument VPP's DPDK plugin around MANA device start and queue setup, then compare that path directly to the working `testpmd` configuration.
+- **Option B: Different dataplane target**. Use DPDK `testpmd` or a smaller custom DPDK app to prove kernel bypass and packet IO on MANA without VPP.
+- **Option C: Different VPP data path**. Keep VPP for the routing feature demo, but use `af-packet` or another supported interface for the functional POC while documenting that native MANA bypass was not achieved.
 
 ---
 
