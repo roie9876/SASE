@@ -8,6 +8,8 @@ Use this area when you want the latest agreed direction, not the earlier explora
 
 - [../requirements/README.md](../requirements/README.md) - customer requirement capture and open questions
 - [phase1-node-vpp-poc.md](./phase1-node-vpp-poc.md) - current Phase 1 POC direction, tradeoffs, and implementation path
+- [../../pocs/phase1-node-local-vpp/README.md](../../pocs/phase1-node-local-vpp/README.md) - live validated Phase 1 POC baseline and scenario index
+- [../../pocs/phase1-node-local-vpp/01-vxlan-srv6-afpacket/README.md](../../pocs/phase1-node-local-vpp/01-vxlan-srv6-afpacket/README.md) - detailed findings, MTU analysis, and performance results
 
 ## Scope Of The Current Direction
 

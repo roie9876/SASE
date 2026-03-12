@@ -4,6 +4,30 @@ This document captures the current implementation direction for the new proof of
 
 It also records why this path was chosen over the alternatives that were discussed.
 
+## Current Status
+
+The direction in this document is now backed by a live validated Phase 1 baseline.
+
+The detailed implementation, debugging notes, MTU findings, and measured performance are documented in:
+
+- [../../pocs/phase1-node-local-vpp/README.md](../../pocs/phase1-node-local-vpp/README.md)
+- [../../pocs/phase1-node-local-vpp/01-vxlan-srv6-afpacket/README.md](../../pocs/phase1-node-local-vpp/01-vxlan-srv6-afpacket/README.md)
+
+What is proven so far:
+
+- the branch tunnel can terminate on the AKS forwarding NIC path rather than the node management IP
+- VPP can decapsulate VXLAN, consume SRv6 context, and deliver traffic to a same-node service pod dataplane interface
+- the current tuned Phase 1 result reached about `2.16 Gbit/s` TCP and about `1.48 Gbit/s` UDP at `1.5 Gbit/s` offered load
+
+What was learned so far:
+
+- the forwarding underlay can be larger than the active service datapath
+- on this AKS node, the Linux VXLAN interface still tops out at `1450`
+- after SRv6 route encapsulation, the practical branch-to-service route MTU becomes `1386`
+- PMTU alignment and offload control were required to recover stable TCP performance
+
+If you are reading this document for the current Phase 1 state, use the `pocs/phase1-node-local-vpp/` documents above as the implementation record.
+
 ## Goal
 
 Build a first POC that proves a single AKS node can behave like a SASE worker node with:
