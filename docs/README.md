@@ -1,6 +1,13 @@
 # Documentation Layout
 
-The main architecture and background documents for this repository live here.
+The main documentation is split into current, requirements, education, and legacy areas.
+
+## `current/`
+
+The active direction for the current Azure SASE investigation.
+
+- `current/README.md` - current working direction and active reading path
+- `current/phase1-node-vpp-poc.md` - why the current POC uses node-local VPP on AKS and what paths were rejected
 
 ## `requirements/`
 
@@ -14,8 +21,8 @@ Introductory and foundational material for readers who need context before divin
 
 - `education/README.md` - SASE, overlay, SRv6, and cloud constraints in repository context
 
-## `architecture/`
+## `legacy/`
 
-Long-form design and deep-dive documents for Azure, SASE, AKS, and networking topics.
+Earlier exploratory architecture and scale documents kept for reference.
 
-Start with the repository root [README.md](../README.md), then use the files in `architecture/` as deep references.
+- `legacy/README.md` - index for archived design thinking
