@@ -59,34 +59,79 @@ This is the current troubleshooting topology for the live lab. It separates the 
 ```mermaid
 flowchart LR
   classDef branch fill:#dbeafe,stroke:#1d4ed8,stroke-width:2px,color:#000
-  classDef node fill:#dcfce7,stroke:#166534,stroke-width:2px,color:#000
+  classDef node fill:#f3f4f6,stroke:#4b5563,stroke-width:2px,color:#000
   classDef vpp fill:#fde68a,stroke:#92400e,stroke-width:2px,color:#000
-  classDef service fill:#fee2e2,stroke:#b91c1c,stroke-width:2px,color:#000
+  classDef service fill:#dcfce7,stroke:#166534,stroke-width:2px,color:#000
   classDef overlay fill:#ede9fe,stroke:#6d28d9,stroke-width:2px,color:#000
   classDef underlay fill:#e5e7eb,stroke:#4b5563,stroke-width:2px,color:#000
+  classDef host fill:#fef3c7,stroke:#b45309,stroke-width:2px,color:#000
+  classDef mgmt fill:#fee2e2,stroke:#b91c1c,stroke-width:2px,color:#000
 
-  BR["branch-vm-dpdk\nAzure underlay eth0 10.120.4.4\nLinux vxlan100 10.50.0.2/30\nInner SRv6 source fc00::2\nBranch route sends 10.20.0.0/16 via vxlan100"]:::branch
+  subgraph BRANCH [branch-vm-dpdk]
+    BR0["eth0\nunderlay NIC\n10.120.4.4"]:::branch
+    BR1["vxlan100\noverlay endpoint\n10.50.0.2/30\nfc00::2/64"]:::overlay
+    BR2["route\n10.20.0.0/16 via vxlan100\ninner SRv6 to fc00::a:1:e004"]:::branch
+    BR0 --> BR1 --> BR2
+  end
 
-  N1U["Node1 Azure underlay\neth0 10.120.2.4\neth1 10.120.3.4"]:::underlay
-  N1L["Node1 Linux overlay\nvxlan100 branch-facing\nvxlan200 node2-facing\ndp0 macvlan on eth1"]:::overlay
-  N1V["Node1 VPP\nphase1-vpp\nhost-vxlan100 10.50.0.1/30 fc00::1/64\nhost-vxlan200 10.60.0.1/30\nhost-dp0 10.20.0.254/16"]:::vpp
-  N1P["Node1 service pod\nphase1-service-a\neth0 10.246.0.95\nnet1 10.20.1.20/16\ndefault remote path via 10.20.0.254"]:::service
+  subgraph N1 [AKS Node 1]
+    N1P["phase1-service-a\neth0 10.246.0.95\nnet1 10.20.1.20/16"]:::service
+    N1M["eth0\nmanagement NIC\n10.120.2.4"]:::mgmt
+    subgraph N1HOST [Linux host networking]
+      N1U["eth1\nforwarding NIC\n10.120.3.4"]:::host
+      N1L1["vxlan100\nbranch-facing outer VXLAN"]:::overlay
+      N1L2["vxlan200\nnode2-facing outer VXLAN"]:::overlay
+      N1L3["dp0\nmacvlan on eth1"]:::host
+    end
+    subgraph N1VSW [VPP dataplane]
+      N1V0["phase1-vpp"]:::vpp
+      N1V1["host-vxlan100\n10.50.0.1/30\nfc00::1/64"]:::vpp
+      N1V2["host-vxlan200\n10.60.0.1/30"]:::vpp
+      N1V3["host-dp0\n10.20.0.254/16"]:::vpp
+      N1V0 --> N1V1
+      N1V0 --> N1V2
+      N1V0 --> N1V3
+    end
+    N1M -. mgmt only .-> N1P
+    N1V3 --> N1P
+    N1P --> N1V3
+  end
 
-  N2U["Node2 Azure underlay\neth0 10.120.2.5\neth1 10.120.3.5"]:::underlay
-  N2L["Node2 Linux overlay\nvxlan200 node1-facing\ndp0 macvlan on eth1"]:::overlay
-  N2V["Node2 VPP\nphase1-vpp-node2\nhost-vxlan200 10.60.0.2/30\nhost-dp0 10.21.0.254/16"]:::vpp
-  N2P["Node2 service pod\nphase1-service-b\neth0 10.246.1.223\nnet1 10.21.1.20/16\ndefault remote path via 10.21.0.254"]:::service
+  subgraph N2 [AKS Node 2]
+    N2P["phase1-service-b\neth0 10.246.1.223\nnet1 10.21.1.20/16"]:::service
+    N2M["eth0\nmanagement NIC\n10.120.2.5"]:::mgmt
+    subgraph N2HOST [Linux host networking]
+      N2U["eth1\nforwarding NIC\n10.120.3.5"]:::host
+      N2L1["vxlan200\nnode1-facing outer VXLAN"]:::overlay
+      N2L2["dp0\nmacvlan on eth1"]:::host
+    end
+    subgraph N2VSW [VPP dataplane]
+      N2V0["phase1-vpp-node2"]:::vpp
+      N2V1["host-vxlan200\n10.60.0.2/30"]:::vpp
+      N2V2["host-dp0\n10.21.0.254/16"]:::vpp
+      N2V0 --> N2V1
+      N2V0 --> N2V2
+    end
+    N2M -. mgmt only .-> N2P
+    N2V2 --> N2P
+    N2P --> N2V2
+  end
 
-  BR -->|outer VXLAN UDP 8472 to 10.120.3.4| N1U
-  N1U --> N1L --> N1V --> N1P
-  N1P --> N1V
-  N1V -->|expected outer VXLAN UDP 8472 to 10.120.3.5| N2L
-  N2L --> N2U
-  N2L --> N2V --> N2P
-  N2P --> N2V
+  AZ["Azure underlay NIC IPs only\nbranch 10.120.4.4\nnode1 eth0 10.120.2.4\nnode1 eth1 10.120.3.4\nnode2 eth0 10.120.2.5\nnode2 eth1 10.120.3.5"]:::underlay
 
-  N1V -.->|VPP transit overlay| N2V
-  BR -.->|inner SRv6 service context| N1V
+  BR1 -->|outer VXLAN UDP 8472 to 10.120.3.4| N1L1
+  N1U --> N1L1
+  N1U --> N1L2
+  N1U --> N1L3
+  N2U --> N2L1
+  N2U --> N2L2
+  N1V0 -->|expected outer VXLAN UDP 8472 to 10.120.3.5| N2L1
+
+  N1V2 -.->|VPP transit overlay| N2V1
+  BR2 -.->|inner SRv6 service context| N1V1
+  AZ --- BR0
+  AZ --- N1U
+  AZ --- N2U
 ```
 
 Important address separation:

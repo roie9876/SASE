@@ -130,59 +130,72 @@ The deployment model for this POC is:
 ```mermaid
 flowchart TB
     classDef branch fill:#dbeafe,stroke:#1d4ed8,stroke-width:2px,color:#000
-    classDef node fill:#dcfce7,stroke:#166534,stroke-width:2px,color:#000
+    classDef node fill:#f3f4f6,stroke:#4b5563,stroke-width:2px,color:#000
     classDef vpp fill:#fde68a,stroke:#92400e,stroke-width:2px,color:#000
-    classDef service fill:#fee2e2,stroke:#b91c1c,stroke-width:2px,color:#000
+    classDef service fill:#dcfce7,stroke:#166534,stroke-width:2px,color:#000
     classDef overlay fill:#ede9fe,stroke:#6d28d9,stroke-width:2px,color:#000
     classDef underlay fill:#e5e7eb,stroke:#4b5563,stroke-width:2px,color:#000
+    classDef host fill:#fef3c7,stroke:#b45309,stroke-width:2px,color:#000
+    classDef mgmt fill:#fee2e2,stroke:#b91c1c,stroke-width:2px,color:#000
+    classDef note fill:#eff6ff,stroke:#2563eb,stroke-width:1px,color:#000
 
     subgraph branch [branch-vm-dpdk]
-        BR_ETH0["eth0\nAzure underlay\n10.120.4.4"]:::branch
-        BR_VX100["vxlan100\n10.50.0.2/30\nfc00::2/64"]:::overlay
-        BR_ROUTE["Branch route\n10.20.0.0/16 via vxlan100\ninner SRv6 to fc00::a:1:e004"]:::branch
-        BR_ETH0 --> BR_VX100 --> BR_ROUTE
+        BR_PLAIN["eth0\nunderlay NIC\n10.120.4.4"]:::branch
+        BR_VX100["vxlan100\noverlay endpoint\n10.50.0.2/30\nfc00::2/64"]:::overlay
+        BR_ROUTE["branch route\n10.20.0.0/16 via vxlan100\ninner SRv6 to fc00::a:1:e004"]:::branch
+        BR_PLAIN --> BR_VX100 --> BR_ROUTE
     end
 
     subgraph azure [Azure VNet Underlay]
-        AZ_NOTE["Azure-visible IPs only\nNode1 eth0 10.120.2.4\nNode1 eth1 10.120.3.4\nNode2 eth0 10.120.2.5\nNode2 eth1 10.120.3.5\nBranch eth0 10.120.4.4"]:::underlay
+        AZ_NOTE["Azure-visible NIC IPs only\nbranch eth0 10.120.4.4\nnode1 eth0 10.120.2.4\nnode1 eth1 10.120.3.4\nnode2 eth0 10.120.2.5\nnode2 eth1 10.120.3.5"]:::underlay
     end
 
     subgraph node1 [AKS Node 1]
-        N1_ETH0["eth0\nmgmt NIC\n10.120.2.4"]:::node
-        N1_ETH1["eth1\nforwarding NIC\n10.120.3.4"]:::node
-        N1_VX100["Linux vxlan100\nbranch-facing outer VXLAN\nUDP 8472"]:::overlay
-        N1_VX200["Linux vxlan200\nnode2-facing outer VXLAN\nUDP 8472"]:::overlay
-        N1_DP0["Linux dp0\nmacvlan on eth1"]:::node
-        N1_VPP["phase1-vpp\nVPP hostNetwork pod"]:::vpp
-        N1_HVX100["host-vxlan100\n10.50.0.1/30\nfc00::1/64"]:::vpp
-        N1_HVX200["host-vxlan200\n10.60.0.1/30"]:::vpp
-        N1_HDP0["host-dp0\n10.20.0.254/16"]:::vpp
-        N1_POD["phase1-service-a\neth0 mgmt 10.246.0.95\nnet1 10.20.1.20/16"]:::service
+        N1_POD["phase1-service-a\neth0 10.246.0.95\nnet1 10.20.1.20/16"]:::service
+        N1_MGMT["eth0\nmanagement NIC\n10.120.2.4"]:::mgmt
+        subgraph N1_HOST [Linux host networking]
+            N1_ETH1["eth1\nforwarding NIC\n10.120.3.4"]:::host
+            N1_VX100["vxlan100\nbranch-facing outer VXLAN\nUDP 8472"]:::overlay
+            N1_VX200["vxlan200\nnode2-facing outer VXLAN\nUDP 8472"]:::overlay
+            N1_DP0["dp0\nmacvlan on eth1"]:::host
+        end
+        subgraph N1_VSW [VPP dataplane]
+            N1_VPP["phase1-vpp\nVPP hostNetwork pod"]:::vpp
+            N1_HVX100["host-vxlan100\n10.50.0.1/30\nfc00::1/64"]:::vpp
+            N1_HVX200["host-vxlan200\n10.60.0.1/30"]:::vpp
+            N1_HDP0["host-dp0\n10.20.0.254/16"]:::vpp
+            N1_VPP --> N1_HVX100
+            N1_VPP --> N1_HVX200
+            N1_VPP --> N1_HDP0
+        end
 
+        N1_MGMT -. mgmt only .-> N1_POD
         N1_ETH1 --> N1_VX100
         N1_ETH1 --> N1_VX200
         N1_ETH1 --> N1_DP0
-        N1_VPP --> N1_HVX100
-        N1_VPP --> N1_HVX200
-        N1_VPP --> N1_HDP0
         N1_HDP0 --> N1_POD
         N1_POD --> N1_HDP0
     end
 
     subgraph node2 [AKS Node 2]
-        N2_ETH0["eth0\nmgmt NIC\n10.120.2.5"]:::node
-        N2_ETH1["eth1\nforwarding NIC\n10.120.3.5"]:::node
-        N2_VX200["Linux vxlan200\nnode1-facing outer VXLAN\nUDP 8472"]:::overlay
-        N2_DP0["Linux dp0\nmacvlan on eth1"]:::node
-        N2_VPP["phase1-vpp-node2\nVPP hostNetwork pod"]:::vpp
-        N2_HVX200["host-vxlan200\n10.60.0.2/30"]:::vpp
-        N2_HDP0["host-dp0\n10.21.0.254/16"]:::vpp
-        N2_POD["phase1-service-b\neth0 mgmt 10.246.1.223\nnet1 10.21.1.20/16"]:::service
+        N2_POD["phase1-service-b\neth0 10.246.1.223\nnet1 10.21.1.20/16"]:::service
+        N2_MGMT["eth0\nmanagement NIC\n10.120.2.5"]:::mgmt
+        subgraph N2_HOST [Linux host networking]
+            N2_ETH1["eth1\nforwarding NIC\n10.120.3.5"]:::host
+            N2_VX200["vxlan200\nnode1-facing outer VXLAN\nUDP 8472"]:::overlay
+            N2_DP0["dp0\nmacvlan on eth1"]:::host
+        end
+        subgraph N2_VSW [VPP dataplane]
+            N2_VPP["phase1-vpp-node2\nVPP hostNetwork pod"]:::vpp
+            N2_HVX200["host-vxlan200\n10.60.0.2/30"]:::vpp
+            N2_HDP0["host-dp0\n10.21.0.254/16"]:::vpp
+            N2_VPP --> N2_HVX200
+            N2_VPP --> N2_HDP0
+        end
 
+        N2_MGMT -. mgmt only .-> N2_POD
         N2_ETH1 --> N2_VX200
         N2_ETH1 --> N2_DP0
-        N2_VPP --> N2_HVX200
-        N2_VPP --> N2_HDP0
         N2_HDP0 --> N2_POD
         N2_POD --> N2_HDP0
     end
