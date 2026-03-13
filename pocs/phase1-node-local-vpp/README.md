@@ -25,12 +25,27 @@ What is proven so far:
 - the path is stable enough for real `ping` and `iperf3` validation
 - the current tuned result is about `2.16 Gbit/s` TCP and about `1.48 Gbit/s` UDP at `1.5 Gbit/s` offered load
 
+What has now been added for the next test stage:
+
+- the AKS node pool was scaled from one worker to two workers
+- the VMSS model was verified to carry the forwarding NIC on new nodes as well
+- a second VPP pod and a second service pod were deployed on Node 2
+- a dedicated Node 2 dataplane subnet was introduced to avoid `host-local` IPAM overlap with Node 1
+
+Current Phase 1B status:
+
+- east-west worker-to-worker dataplane testing is now an active test item
+- Node 2 local service-to-VPP dataplane reachability was recovered after fixing the `host-dp0` path on the second VPP instance
+- inter-node underlay reachability over forwarding NICs `10.120.3.4 <-> 10.120.3.5` is working
+- inter-node service-pod forwarding through the second VPP instance is not yet stable enough to claim a valid throughput result
+
 What was learned so far:
 
 - the forwarding underlay can be larger than the active service datapath
 - on this AKS node, the Linux VXLAN interface still tops out at `1450`
 - with SRv6 encapsulation on the branch route, the practical route MTU becomes `1386`
 - PMTU alignment and offload control are required for stable TCP
+- scaling out the worker pool is straightforward, but cross-node throughput depends on stabilizing the second VPP instance's inter-node forwarding path before load tests are meaningful
 
 Read [01-vxlan-srv6-afpacket/README.md](./01-vxlan-srv6-afpacket/README.md) for the full runbook, debugging findings, MTU analysis, and performance results.
 
@@ -81,6 +96,22 @@ Purpose:
 - prove `dpdk-testpmd`
 - only promote this path into the main POC after VPP forwarding is actually stable
 
+### `04-east-west-throughput/`
+
+Cross-node east-west throughput scenario.
+
+Purpose:
+
+- add a second worker node
+- run one VPP instance on each worker
+- place equal numbers of fake SASE pods on both workers
+- measure aggregate throughput from Node 1 service pods to Node 2 service pods through the VPP dataplane
+
+Current state:
+
+- partially prepared in the live lab
+- blocked on stabilizing inter-node forwarding through the second VPP instance
+
 ## Deployment Direction
 
 The deployment model for this POC is:
@@ -99,54 +130,70 @@ The deployment model for this POC is:
 ```mermaid
 flowchart TB
     classDef branch fill:#dbeafe,stroke:#1d4ed8,stroke-width:2px,color:#000
-    classDef tunnel fill:#e5e7eb,stroke:#4b5563,stroke-width:2px,color:#000
-    classDef aks fill:#dcfce7,stroke:#166534,stroke-width:2px,color:#000
+    classDef node fill:#dcfce7,stroke:#166534,stroke-width:2px,color:#000
     classDef vpp fill:#fde68a,stroke:#92400e,stroke-width:2px,color:#000
     classDef service fill:#fee2e2,stroke:#b91c1c,stroke-width:2px,color:#000
-    classDef mgmt fill:#ede9fe,stroke:#6d28d9,stroke-width:2px,color:#000
+    classDef overlay fill:#ede9fe,stroke:#6d28d9,stroke-width:2px,color:#000
+    classDef underlay fill:#e5e7eb,stroke:#4b5563,stroke-width:2px,color:#000
 
-    subgraph branches [Branch Side]
-        BRANCH_VM["Branch VM\neth0: branch underlay\nvxlan100: tunnel endpoint"]:::branch
-        SRV6_ENCAP["SRv6 encap\nInner payload carries tenant or service context\nOuter transport stays VXLAN UDP 8472"]:::branch
-        BRANCH_VM --> SRV6_ENCAP
+    subgraph branch [branch-vm-dpdk]
+        BR_ETH0["eth0\nAzure underlay\n10.120.4.4"]:::branch
+        BR_VX100["vxlan100\n10.50.0.2/30\nfc00::2/64"]:::overlay
+        BR_ROUTE["Branch route\n10.20.0.0/16 via vxlan100\ninner SRv6 to fc00::a:1:e004"]:::branch
+        BR_ETH0 --> BR_VX100 --> BR_ROUTE
     end
 
-    subgraph overlay [Azure Transport]
-        VXLAN_TUNNEL["VXLAN overlay over Azure SDN\nAzure routes only the outer packet\nClear native SRv6 is not used"]:::tunnel
-        SRV6_ENCAP --> VXLAN_TUNNEL
+    subgraph azure [Azure VNet Underlay]
+        AZ_NOTE["Azure-visible IPs only\nNode1 eth0 10.120.2.4\nNode1 eth1 10.120.3.4\nNode2 eth0 10.120.2.5\nNode2 eth1 10.120.3.5\nBranch eth0 10.120.4.4"]:::underlay
     end
 
-    subgraph node [AKS Dataplane Node]
-        NODE_ETH0["Node eth0\nAKS management path\nAzure CNI Overlay plus Cilium"]:::mgmt
-        NODE_ETH1["Node eth1\nDataplane NIC\nDedicated for the POC dataplane track"]:::aks
+    subgraph node1 [AKS Node 1]
+        N1_ETH0["eth0\nmgmt NIC\n10.120.2.4"]:::node
+        N1_ETH1["eth1\nforwarding NIC\n10.120.3.4"]:::node
+        N1_VX100["Linux vxlan100\nbranch-facing outer VXLAN\nUDP 8472"]:::overlay
+        N1_VX200["Linux vxlan200\nnode2-facing outer VXLAN\nUDP 8472"]:::overlay
+        N1_DP0["Linux dp0\nmacvlan on eth1"]:::node
+        N1_VPP["phase1-vpp\nVPP hostNetwork pod"]:::vpp
+        N1_HVX100["host-vxlan100\n10.50.0.1/30\nfc00::1/64"]:::vpp
+        N1_HVX200["host-vxlan200\n10.60.0.1/30"]:::vpp
+        N1_HDP0["host-dp0\n10.20.0.254/16"]:::vpp
+        N1_POD["phase1-service-a\neth0 mgmt 10.246.0.95\nnet1 10.20.1.20/16"]:::service
 
-        subgraph vppnode [VPP Node-Local Forwarder]
-            VPP_DS["VPP privileged DaemonSet pod\nhostNetwork plus hugepages plus host mounts"]:::vpp
-            VXLAN_DECAP["VXLAN decap interface\nOuter tunnel terminates here"]:::vpp
-            SRV6_LOOKUP["SRv6 lookup\nLocalSID or VRF decision"]:::vpp
-            CHAIN["Static forwarding and chaining\nSame node first"]:::vpp
-
-            VPP_DS --> VXLAN_DECAP
-            VXLAN_DECAP --> SRV6_LOOKUP
-            SRV6_LOOKUP --> CHAIN
-        end
-
-        subgraph svc [Fake SASE Service Pods]
-            POD_A["Service Pod A\neth0: mgmt\nnet1: dataplane"]:::service
-            POD_B["Service Pod B\neth0: mgmt\nnet1: dataplane"]:::service
-            EGRESS["Egress or drop\nStatic Phase 1 action"]:::service
-        end
+        N1_ETH1 --> N1_VX100
+        N1_ETH1 --> N1_VX200
+        N1_ETH1 --> N1_DP0
+        N1_VPP --> N1_HVX100
+        N1_VPP --> N1_HVX200
+        N1_VPP --> N1_HDP0
+        N1_HDP0 --> N1_POD
+        N1_POD --> N1_HDP0
     end
 
-    VXLAN_TUNNEL --> VXLAN_DECAP
-    NODE_ETH1 --> VPP_DS
-    NODE_ETH0 -. mgmt only .-> POD_A
-    NODE_ETH0 -. mgmt only .-> POD_B
-    CHAIN --> POD_A
-    CHAIN --> POD_B
-    CHAIN --> EGRESS
-    POD_A --> CHAIN
-    POD_B --> CHAIN
+    subgraph node2 [AKS Node 2]
+        N2_ETH0["eth0\nmgmt NIC\n10.120.2.5"]:::node
+        N2_ETH1["eth1\nforwarding NIC\n10.120.3.5"]:::node
+        N2_VX200["Linux vxlan200\nnode1-facing outer VXLAN\nUDP 8472"]:::overlay
+        N2_DP0["Linux dp0\nmacvlan on eth1"]:::node
+        N2_VPP["phase1-vpp-node2\nVPP hostNetwork pod"]:::vpp
+        N2_HVX200["host-vxlan200\n10.60.0.2/30"]:::vpp
+        N2_HDP0["host-dp0\n10.21.0.254/16"]:::vpp
+        N2_POD["phase1-service-b\neth0 mgmt 10.246.1.223\nnet1 10.21.1.20/16"]:::service
+
+        N2_ETH1 --> N2_VX200
+        N2_ETH1 --> N2_DP0
+        N2_VPP --> N2_HVX200
+        N2_VPP --> N2_HDP0
+        N2_HDP0 --> N2_POD
+        N2_POD --> N2_HDP0
+    end
+
+    BR_VX100 -.->|outer VXLAN over Azure| N1_VX100
+    N1_VX200 -.->|outer VXLAN over Azure| N2_VX200
+    BR_ROUTE -.->|inner SRv6 context| N1_HVX100
+    N1_HVX200 -.->|inter-node transit overlay| N2_HVX200
+    AZ_NOTE --- BR_ETH0
+    AZ_NOTE --- N1_ETH1
+    AZ_NOTE --- N2_ETH1
 ```
 
 ## First Success Criteria

@@ -52,6 +52,49 @@ That means this scenario is about architectural proof first:
 6. VPP forwards to the selected local service pod dataplane interface.
 7. The service pod returns traffic to VPP for the next hop, egress, or drop.
 
+## Current Three-Device Topology
+
+This is the current troubleshooting topology for the live lab. It separates the Azure-visible underlay addresses from the overlay and VPP-local transit addresses created by the POC.
+
+```mermaid
+flowchart LR
+  classDef branch fill:#dbeafe,stroke:#1d4ed8,stroke-width:2px,color:#000
+  classDef node fill:#dcfce7,stroke:#166534,stroke-width:2px,color:#000
+  classDef vpp fill:#fde68a,stroke:#92400e,stroke-width:2px,color:#000
+  classDef service fill:#fee2e2,stroke:#b91c1c,stroke-width:2px,color:#000
+  classDef overlay fill:#ede9fe,stroke:#6d28d9,stroke-width:2px,color:#000
+  classDef underlay fill:#e5e7eb,stroke:#4b5563,stroke-width:2px,color:#000
+
+  BR["branch-vm-dpdk\nAzure underlay eth0 10.120.4.4\nLinux vxlan100 10.50.0.2/30\nInner SRv6 source fc00::2\nBranch route sends 10.20.0.0/16 via vxlan100"]:::branch
+
+  N1U["Node1 Azure underlay\neth0 10.120.2.4\neth1 10.120.3.4"]:::underlay
+  N1L["Node1 Linux overlay\nvxlan100 branch-facing\nvxlan200 node2-facing\ndp0 macvlan on eth1"]:::overlay
+  N1V["Node1 VPP\nphase1-vpp\nhost-vxlan100 10.50.0.1/30 fc00::1/64\nhost-vxlan200 10.60.0.1/30\nhost-dp0 10.20.0.254/16"]:::vpp
+  N1P["Node1 service pod\nphase1-service-a\neth0 10.246.0.95\nnet1 10.20.1.20/16\ndefault remote path via 10.20.0.254"]:::service
+
+  N2U["Node2 Azure underlay\neth0 10.120.2.5\neth1 10.120.3.5"]:::underlay
+  N2L["Node2 Linux overlay\nvxlan200 node1-facing\ndp0 macvlan on eth1"]:::overlay
+  N2V["Node2 VPP\nphase1-vpp-node2\nhost-vxlan200 10.60.0.2/30\nhost-dp0 10.21.0.254/16"]:::vpp
+  N2P["Node2 service pod\nphase1-service-b\neth0 10.246.1.223\nnet1 10.21.1.20/16\ndefault remote path via 10.21.0.254"]:::service
+
+  BR -->|outer VXLAN UDP 8472 to 10.120.3.4| N1U
+  N1U --> N1L --> N1V --> N1P
+  N1P --> N1V
+  N1V -->|expected outer VXLAN UDP 8472 to 10.120.3.5| N2L
+  N2L --> N2U
+  N2L --> N2V --> N2P
+  N2P --> N2V
+
+  N1V -. VPP transit overlay 10.60.0.1 to 10.60.0.2 .-> N2V
+  BR -. inner SRv6 service context .-> N1V
+```
+
+Important address separation:
+
+- Azure only knows the underlay NIC addresses in `10.120.x.x`
+- `10.50.0.x` and `10.60.0.x` are POC-created overlay or transit addresses inside Linux and VPP
+- service pod dataplane addresses are `10.20.x.x` on Node 1 and `10.21.x.x` on Node 2
+
 ## What Was Actually Deployed
 
 The live lab ended up with these active pieces:
@@ -161,6 +204,43 @@ The Phase 1 conclusion from the current live test is:
 - TCP is recoverable once PMTU and offload handling are controlled
 - the bottleneck is no longer basic reachability, but how much performance we can extract from the `af_packet` plus Linux VXLAN path
 
+## Phase 1B East-West Scale Attempt
+
+The next test goal is no longer only same-node delivery.
+
+The active follow-up test is:
+
+- scale the AKS worker pool to two nodes
+- run one VPP pod per node
+- place equal counts of fake SASE service pods on Node 1 and Node 2
+- send traffic from multiple Node 1 service pods toward matching Node 2 service pods
+- measure the aggregate throughput through the inter-node VPP dataplane
+
+Azure constraint for this phase:
+
+- any ingress, egress, or east-west packet that crosses the Azure fabric must use an Azure-safe outer transport
+- in this POC, that means VXLAN over the forwarding NIC path
+- SRv6 may still be used as inner service context for VPP, but native SRv6 must not be exposed directly on the Azure underlay
+
+What was completed in the live lab:
+
+- node pool scaled from `1` to `2`
+- second worker `aks-nodepool1-38799324-vmss000002` became Ready
+- second worker forwarding NIC was verified as `10.120.3.5`
+- second VPP pod `phase1-vpp-node2` was deployed on Node 2
+- second service pod `phase1-service-b` was deployed on Node 2
+- a Node 2-specific dataplane subnet `10.21.0.0/16` was introduced to avoid `host-local` overlap with Node 1 `10.20.0.0/16`
+- direct forwarding-NIC underlay between `10.120.3.4` and `10.120.3.5` was validated
+- Node 2 local service pod to local VPP gateway reachability was eventually recovered
+
+What is still blocking a valid throughput number:
+
+- inter-node forwarding through the second VPP instance is not yet stable enough for a credible east-west throughput result
+- part of the debugging path also proved that direct inter-node forwarding assumptions on `eth1` are not the right architecture of record for Azure if they expose native SRv6 to the fabric
+- because of that, any current multi-pod throughput number would measure a broken path rather than the intended architecture
+
+That means this scenario is still the validated Phase 1A baseline, while the Phase 1B worker-to-worker throughput test is now a real next-step item with partial lab bring-up already completed.
+
 ## Repro Sequence
 
 Use the scenario files in this order:
@@ -189,7 +269,7 @@ This scenario now proves all of the following in the current lab:
 - native VPP plus MANA plus DPDK forwarding is still not the stable path of record
 - the AKS node Linux VXLAN ceiling is still `1450`, so this scenario is not a jumbo end-to-end service datapath
 - performance numbers here are for a single service pod and same-node delivery only
-- cross-node chaining is not part of this scenario yet
+- cross-node chaining and aggregate east-west throughput are not yet validated
 
 ## Planned Pod Model
 

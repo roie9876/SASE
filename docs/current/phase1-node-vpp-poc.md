@@ -19,6 +19,19 @@ What is proven so far:
 - VPP can decapsulate VXLAN, consume SRv6 context, and deliver traffic to a same-node service pod dataplane interface
 - the current tuned Phase 1 result reached about `2.16 Gbit/s` TCP and about `1.48 Gbit/s` UDP at `1.5 Gbit/s` offered load
 
+What is now in active extension work:
+
+- the worker pool has been scaled to two nodes to prepare a Phase 1B east-west throughput test
+- a second forwarding NIC was verified on the new worker as expected from the VMSS model
+- a second VPP pod and second service pod were deployed on Node 2
+- the current blocker is stabilizing inter-node forwarding through the second VPP instance before any aggregate throughput number is accepted as valid
+
+Azure transport rule for the current POC:
+
+- any packet that leaves the node across Azure fabric must keep an Azure-safe outer transport
+- for this POC, ingress, egress, and east-west traffic should use VXLAN on the forwarding NIC path as that outer transport
+- SRv6 is only valid here as inner service context consumed by VPP, not as a native Azure underlay packet format
+
 What was learned so far:
 
 - the forwarding underlay can be larger than the active service datapath
