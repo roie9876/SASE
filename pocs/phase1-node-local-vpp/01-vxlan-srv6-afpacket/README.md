@@ -85,8 +85,8 @@ flowchart LR
   N2L --> N2V --> N2P
   N2P --> N2V
 
-  N1V -. VPP transit overlay 10.60.0.1 to 10.60.0.2 .-> N2V
-  BR -. inner SRv6 service context .-> N1V
+  N1V -.->|VPP transit overlay| N2V
+  BR -.->|inner SRv6 service context| N1V
 ```
 
 Important address separation:
