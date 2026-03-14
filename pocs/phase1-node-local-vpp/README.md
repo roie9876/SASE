@@ -112,6 +112,21 @@ Current state:
 - partially prepared in the live lab
 - blocked on stabilizing inter-node forwarding through the second VPP instance
 
+### `05-vpp-owned-eth1/`
+
+Separate east-west recovery scenario.
+
+Purpose:
+
+- stop relying on the blocked `host-vxlan200 -> Linux vxlan200 -> eth1` path
+- move dataplane ownership of `eth1` closer to VPP
+- rebuild worker-to-worker transport on a model that can actually produce packets on the wire
+
+Current state:
+
+- active next-track design document added
+- intended successor for worker-to-worker recovery now that the current path has been narrowed to a broken VPP-to-Linux transmit boundary
+
 ## Deployment Direction
 
 The deployment model for this POC is:

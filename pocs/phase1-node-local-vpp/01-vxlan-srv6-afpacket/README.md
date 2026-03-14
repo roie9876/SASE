@@ -284,6 +284,8 @@ What is still blocking a valid throughput number:
 - part of the debugging path also proved that direct inter-node forwarding assumptions on `eth1` are not the right architecture of record for Azure if they expose native SRv6 to the fabric
 - because of that, any current multi-pod throughput number would measure a broken path rather than the intended architecture
 
+Detailed worker-to-worker debugging notes are tracked separately in [EAST_WEST_DEBUG_REPORT.md](./EAST_WEST_DEBUG_REPORT.md).
+
 That means this scenario is still the validated Phase 1A baseline, while the Phase 1B worker-to-worker throughput test is now a real next-step item with partial lab bring-up already completed.
 
 ## Repro Sequence

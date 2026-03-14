@@ -1,0 +1,4 @@
+error: unknown shorthand flag: 'q' in -qq
+See 'kubectl wait --help' for usage.
+error: unknown shorthand flag: 'q' in -qq
+See 'kubectl wait --help' for usage.

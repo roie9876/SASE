@@ -1,0 +1,112 @@
+```mermaid
+flowchart TB
+    classDef pod fill:#dcfce7,stroke:#166534,stroke-width:2px,color:#000
+    classDef vpp fill:#fde68a,stroke:#92400e,stroke-width:2px,color:#000
+    classDef linux fill:#e5e7eb,stroke:#4b5563,stroke-width:1px,color:#000
+    classDef iface fill:#dbeafe,stroke:#1d4ed8,stroke-width:1px,color:#000,font-size:11px
+    classDef veth fill:#ede9fe,stroke:#6d28d9,stroke-width:1px,color:#000,font-size:11px
+    classDef tunnel fill:#fee2e2,stroke:#b91c1c,stroke-width:1px,color:#000,font-size:11px
+    classDef mgmt fill:#fce7f3,stroke:#be185d,stroke-width:1px,color:#000
+    classDef azure fill:#bfdbfe,stroke:#1e40af,stroke-width:2px,color:#000
+
+    subgraph NODE["Kubernetes Node (Standard_D4s_v6 / MANA NIC)"]
+        direction TB
+
+        subgraph SASE_POD["SASE Service Pod (e.g. phase1-service-a)"]
+            POD_ETH0["eth0<br/>10.246.0.95<br/>(AKS mgmt)"]:::mgmt
+            POD_NET1["net1<br/>10.20.1.20/16<br/>(macvlan child on eth1)"]:::iface
+        end
+        SASE_POD:::pod
+
+        subgraph VPP_POD["VPP Pod (hostNetwork, privileged)"]
+            direction TB
+            subgraph VPP_PROC["VPP Process (v26.02)"]
+                direction LR
+                HOST_DP0["host-dp0<br/>af_packet on dp0<br/>10.20.0.254/16<br/>(pod gateway)"]:::vpp
+                HOST_ETH1["host-eth1<br/>af_packet on eth1<br/>10.120.3.4/24<br/>(RX only)"]:::vpp
+                HOST_UL0["host-vpp-ul0<br/>af_packet v2 on vpp-ul0<br/>172.16.200.2/30<br/>(TX path)"]:::vpp
+                VXLAN200["vxlan_tunnel200<br/>VNI 200, encap-vrf-id 0<br/>10.60.0.1/30<br/>(E-W overlay)"]:::tunnel
+                HOST_VX100["host-vxlan100<br/>af_packet on vxlan100<br/>10.50.0.1/30 + fc00::1/64<br/>(N-S branch)"]:::tunnel
+            end
+
+            subgraph VPP_FEATURES["VPP Features"]
+                BYPASS["ip4-vxlan-bypass<br/>on host-eth1"]
+                GSO1["GSO feature<br/>on host-vpp-ul0"]
+                GSO2["GSO feature<br/>on host-dp0"]
+            end
+        end
+        VPP_POD:::vpp
+
+        subgraph LINUX["Linux Kernel Network Stack"]
+            direction TB
+            subgraph VETH["Veth Pair (MTU 3900)"]
+                VPP_UL0["vpp-ul0<br/>(VPP side)<br/>no IP"]:::veth
+                LINUX_UL0["linux-ul0<br/>(Linux side)<br/>172.16.200.1/30"]:::veth
+            end
+
+            DP0["dp0<br/>macvlan bridge on eth1<br/>(parent for pod net1)"]:::iface
+            VXLAN100["vxlan100<br/>Linux VXLAN id=100<br/>remote=branch VM<br/>(N-S only, node1)"]:::tunnel
+
+            subgraph LINUX_FWD["Linux Forwarding"]
+                IP_FWD["ip_forward=1<br/>rp_filter=0"]:::linux
+                NFT["nft early-postrouting<br/>SNAT UDP/4789<br/>→ 10.120.3.4"]:::linux
+                CONNTRACK["conntrack_checksum=0"]:::linux
+            end
+        end
+
+        subgraph MGMT["Management Path"]
+            CILIUM["Cilium CNI<br/>(BPF removed from eth1 egress)"]:::mgmt
+            KUBELET["Kubelet"]:::mgmt
+        end
+
+        subgraph NICS["Physical NICs"]
+            ETH1["eth1 (dpdk-nic)<br/>10.120.3.4 (IP removed from Linux)<br/>MTU 3900<br/>MANA virtual NIC<br/>⚠ af_packet TX broken"]:::iface
+            ETH0["eth0<br/>10.120.2.4<br/>MTU 1500<br/>(AKS management)"]:::mgmt
+        end
+    end
+
+    subgraph AZURE["Azure SDN Fabric (10.120.3.0/24)"]
+        REMOTE["→ Remote Node eth1<br/>10.120.3.5"]:::azure
+        BRANCH["→ Branch VM<br/>10.120.4.4"]:::azure
+        GW["Azure GW<br/>10.120.3.1"]:::azure
+    end
+
+    %% Pod to VPP connections
+    POD_NET1 -->|"macvlan child<br/>L2 frames"| DP0
+    DP0 -->|"af_packet RX/TX"| HOST_DP0
+    POD_ETH0 -->|"AKS CNI"| CILIUM
+
+    %% VPP internal routing
+    HOST_DP0 -->|"ip4-lookup<br/>10.21.0.0/16 →<br/>via vxlan_tunnel200"| VXLAN200
+    VXLAN200 -->|"VXLAN encap<br/>src=10.120.3.4<br/>dst=10.120.3.5<br/>VNI 200"| HOST_UL0
+    HOST_ETH1 -->|"ip4-vxlan-bypass<br/>UDP/4789 →<br/>vxlan4-input"| VXLAN200
+
+    %% VPP to Linux connections
+    HOST_UL0 -->|"af_packet v2<br/>sendto() per-frame"| VPP_UL0
+    HOST_ETH1 -.->|"af_packet RX<br/>(TX broken on MANA)"| ETH1
+
+    %% Veth pair
+    VPP_UL0 <-->|"veth pair"| LINUX_UL0
+
+    %% Linux forwarding path
+    LINUX_UL0 -->|"ip_forward<br/>→ table 100"| IP_FWD
+    IP_FWD -->|"route to<br/>10.120.3.5"| NFT
+    NFT -->|"SNAT outer src<br/>→ 10.120.3.4"| ETH1
+
+    %% Physical NIC to Azure
+    ETH1 -->|"VXLAN over<br/>Azure fabric"| REMOTE
+    ETH1 -.->|"branch VXLAN<br/>id=100"| BRANCH
+    ETH0 -->|"AKS mgmt<br/>traffic"| GW
+
+    %% Branch path
+    HOST_VX100 -->|"af_packet"| VXLAN100
+    VXLAN100 -.->|"via eth1"| BRANCH
+
+    %% Management
+    CILIUM --> ETH0
+    KUBELET --> CILIUM
+
+    %% Incoming VXLAN path (from remote)
+    REMOTE -->|"incoming VXLAN<br/>UDP/4789"| ETH1
+    ETH1 -->|"af_packet RX"| HOST_ETH1
+```
