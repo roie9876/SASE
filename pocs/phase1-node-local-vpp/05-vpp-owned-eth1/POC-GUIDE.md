@@ -47,83 +47,61 @@ VPP's `af_packet` TX on **MANA virtual NICs does not transmit frames**. VPP incr
 
 ### The Solution: Hybrid TX/RX Model
 
-```
-┌──────────────────────────────── KUBERNETES NODE (D4s_v6 / MANA) ─────────────────────────────────┐
-│                                                                                                   │
-│  ┌─── SASE Service Pod ────┐         ┌──── Management Pods ────┐                                 │
-│  │                          │         │  CoreDNS, kube-proxy,   │                                 │
-│  │  eth0 ─── AKS mgmt      │         │  Cilium agent, etc.     │                                 │
-│  │  (10.246.0.95)           │         └──────────┬──────────────┘                                 │
-│  │                          │                    │                                                │
-│  │  net1 ─── dataplane      │                    │ eth0 (AKS CNI)                                │
-│  │  (10.20.1.20/16)         │                    │                                                │
-│  │  macvlan child on eth1   │                    ▼                                                │
-│  └──────────┬───────────────┘         ┌──── Cilium CNI ─────────┐                                │
-│             │ L2 frames               │  BPF on eth0            │                                │
-│             ▼                         │  BPF REMOVED from eth1  │                                │
-│  ┌──── dp0 (macvlan bridge) ───┐      └──────────┬──────────────┘                                │
-│  │  parent on eth1             │                 │                                                │
-│  │  MTU 3900                   │                 │                                                │
-│  │  offloads: tx/rx OFF        │                 │                                                │
-│  └──────────┬──────────────────┘                 │                                                │
-│             │ af_packet RX/TX (v3)               │                                                │
-│  ╔══════════╪══════════════════════════════ VPP POD (hostNetwork) ═══╗                            │
-│  ║          ▼                                                        ║                            │
-│  ║  ┌─ host-dp0 ──────────┐     ┌─ vxlan_tunnel200 ──────────────┐  ║                            │
-│  ║  │  af_packet on dp0    │     │  VPP native VXLAN              │  ║                            │
-│  ║  │  10.20.0.254/16      │     │  VNI 200, encap-vrf-id 0      │  ║                            │
-│  ║  │  pod gateway         │────►│  src=10.120.3.4                │  ║                            │
-│  ║  │  GSO feature ON      │     │  dst=10.120.3.5                │  ║                            │
-│  ║  └──────────────────────┘     │  10.60.0.1/30                 │  ║                            │
-│  ║          ▲ decapped           └──────────┬────────────────────┘  ║                            │
-│  ║          │ inner pkts                    │ VXLAN encap           ║                            │
-│  ║          │                               ▼                       ║                            │
-│  ║  ┌─ host-eth1 ─────────┐     ┌─ host-vpp-ul0 ────────────────┐  ║  ┌─ host-vxlan100 ──────┐ ║
-│  ║  │  af_packet on eth1   │     │  af_packet V2 on vpp-ul0      │  ║  │  af_packet on vxlan100│ ║
-│  ║  │  10.120.3.4/24       │     │  172.16.200.2/30              │  ║  │  10.50.0.1/30         │ ║
-│  ║  │  RX only (TX broken) │     │  TX path (sendto per-frame)   │  ║  │  fc00::1/64           │ ║
-│  ║  │  ip4-vxlan-bypass ON │     │  GSO feature ON               │  ║  │  SRv6 localsid        │ ║
-│  ║  └──────────┬───────────┘     └──────────┬────────────────────┘  ║  │  (N-S branch only)    │ ║
-│  ╚═════════════╪════════════════════════════╪════════════════════════╝  └──────────┬────────────┘ │
-│                │ af_packet RX               │ af_packet v2 TX                     │              │
-│  ┌─────────────┼────────────────────────────┼─────────────── Linux Kernel ────────┼──────────┐   │
-│  │             │                            ▼                                     │          │   │
-│  │             │                 ┌── vpp-ul0 ◄══veth══► linux-ul0 ──┐             │          │   │
-│  │             │                 │  (VPP side)          (Linux side) │             │          │   │
-│  │             │                 │  MTU 3900            172.16.200.1 │             │          │   │
-│  │             │                 │  tx-checksum ON      ip_forward=1│             │          │   │
-│  │             │                 └──────────────────────────┬───────┘             │          │   │
-│  │             │                                            │                     │          │   │
-│  │             │                          Linux ip_forward  │ route → table 100   │          │   │
-│  │             │                                            ▼                     │          │   │
-│  │             │                            ┌── nft early-postrouting ──┐          │          │   │
-│  │             │                            │  priority: srcnat - 1     │          │          │   │
-│  │             │                            │  SNAT UDP/4789            │          │          │   │
-│  │             │                            │  → src 10.120.3.4        │          │          │   │
-│  │             │                            │  conntrack_checksum=0     │          │          │   │
-│  │             │                            └────────────┬─────────────┘          │          │   │
-│  │             │                                         │                        │          │   │
-│  └─────────────┼─────────────────────────────────────────┼────────────────────────┼──────────┘   │
-│                │                                         │                        │              │
-│  ┌─────────────▼─────────────────────────────────────────▼────────────────────────▼──────────┐   │
-│  │                                                                                           │   │
-│  │  eth1 (dpdk-nic / MANA)                              eth0 (primary / MANA)               │   │
-│  │  IP removed from Linux (VPP owns)                    10.120.2.4                           │   │
-│  │  MTU 3900                                            MTU 1500                             │   │
-│  │  Static ARP: 10.120.3.5 → 7c:ed:8d:9d:9c:0c        AKS management                      │   │
-│  │  ⚠ af_packet TX broken on MANA                      Cilium BPF active                    │   │
-│  │  ✓ af_packet RX works                                                                     │   │
-│  └──────────┬───────────────────────────────────────────────────────────────────┬────────────┘   │
-│             │                                                                   │                │
-└─────────────┼───────────────────────────────────────────────────────────────────┼────────────────┘
-              │ Data Interface                                                    │ Mgmt Interface
-              ▼                                                                   ▼
-┌─────────────────────────────────── Azure SDN ──────────────────────────────────────────────┐
-│  10.120.3.0/24 (dataplane subnet)              10.120.2.0/24 (management subnet)          │
-│  → Remote node eth1: 10.120.3.5                → Remote node eth0: 10.120.2.5             │
-│  → Branch VM: 10.120.4.4                       → AKS API server                           │
-│  MTU up to 4000                                                                            │
-└────────────────────────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    subgraph POD["SASE Service Pod"]
+        POD_NET1["net1 - 10.20.1.20/16\nmacvlan child"]
+        POD_ETH0["eth0 - AKS mgmt\n10.246.0.95"]
+    end
+
+    subgraph VPP["VPP Process v26.02"]
+        DP0["host-dp0\naf_packet on dp0\n10.20.0.254/16\nGSO ON"]
+        VXLAN["vxlan_tunnel200\nVNI 200\nsrc 10.120.3.4\ndst 10.120.3.5"]
+        UL0["host-vpp-ul0\naf_packet V2\n172.16.200.2/30\nGSO ON"]
+        RX["host-eth1\naf_packet RX only\n10.120.3.4/24\nvxlan-bypass ON"]
+        VX100["host-vxlan100\nN-S branch\nfc00::1/64"]
+    end
+
+    subgraph LINUX["Linux Kernel"]
+        MACVLAN["dp0 - macvlan bridge\nparent on eth1"]
+        VETH_VPP["vpp-ul0\nveth VPP side\nMTU 3900"]
+        VETH_LNX["linux-ul0\nveth Linux side\n172.16.200.1/30"]
+        FWD["ip_forward=1\nrp_filter=0"]
+        SNAT["nft SNAT\nUDP/4789\nsrc to 10.120.3.4"]
+        LNX_VX100["vxlan100\nLinux VXLAN id=100"]
+    end
+
+    subgraph NICS["Physical NICs"]
+        ETH1["eth1 - MANA dpdk-nic\nIP removed, MTU 3900\nTX broken, RX works"]
+        ETH0["eth0 - MANA mgmt\n10.120.2.4"]
+    end
+
+    subgraph AZURE["Azure SDN"]
+        REMOTE["Remote Node\n10.120.3.5"]
+        BRANCH["Branch VM\n10.120.4.4"]
+    end
+
+    POD_NET1 -->|L2 frames| MACVLAN
+    MACVLAN -->|af_packet| DP0
+    DP0 -->|ip4-lookup| VXLAN
+    VXLAN -->|encap| UL0
+    UL0 -->|af_packet v2 TX| VETH_VPP
+    VETH_VPP <-->|veth pair| VETH_LNX
+    VETH_LNX --> FWD
+    FWD --> SNAT
+    SNAT --> ETH1
+
+    ETH1 -->|RX af_packet| RX
+    RX -->|vxlan-bypass| VXLAN
+    VXLAN -->|decap| DP0
+
+    ETH1 <-->|VXLAN over fabric| REMOTE
+    ETH1 -.-|branch VXLAN| BRANCH
+    VX100 -->|af_packet| LNX_VX100
+    LNX_VX100 -.-|via eth1| BRANCH
+
+    POD_ETH0 --> ETH0
+    ETH0 --> AZURE
 ```
 
 ### Data Path — East-West Packet Flow
