@@ -1,0 +1,37 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: baseline-client
+  labels:
+    app: baseline-test
+    role: client
+spec:
+  nodeSelector:
+    kubernetes.io/hostname: aks-nodepool1-38799324-vmss000001
+  containers:
+  - name: tools
+    image: ubuntu:22.04
+    command: ["bash", "-c", "apt-get update -qq && apt-get install -y -qq iperf3 iproute2 iputils-ping > /dev/null 2>&1; echo READY; sleep infinity"]
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "256Mi"
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: baseline-server
+  labels:
+    app: baseline-test
+    role: server
+spec:
+  nodeSelector:
+    kubernetes.io/hostname: aks-nodepool1-38799324-vmss000002
+  containers:
+  - name: tools
+    image: ubuntu:22.04
+    command: ["bash", "-c", "apt-get update -qq && apt-get install -y -qq iperf3 iproute2 iputils-ping > /dev/null 2>&1; echo READY; iperf3 -s -D; sleep infinity"]
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "256Mi"
