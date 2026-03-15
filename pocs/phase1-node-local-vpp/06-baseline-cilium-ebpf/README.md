@@ -12,42 +12,44 @@ Measure **native AKS Cilium eBPF** east-west throughput between two pods on diff
 - CNI: **Cilium** (Azure CNI overlay mode, eBPF datapath)
 - Pods: plain Ubuntu 22.04 with iperf3, no Multus, no macvlan, standard eth0 only
 
-## Results
+## Results — MANA (D4s_v6) vs Mellanox (D4s_v5) vs VPP VXLAN
 
 ### ICMP Ping
 
-| Metric | Cilium eBPF | VPP VXLAN (Scenario 05) |
-|--------|-------------|------------------------|
-| Packets | 10/10 | 10/10 |
-| Loss | 0% | 0% |
-| Avg RTT | **6.1 ms** | **4.7 ms** |
+| Metric | MANA Cilium | Mellanox Cilium | VPP VXLAN (MANA) |
+|--------|-------------|-----------------|------------------|
+| Packets | 10/10 | 10/10 | 10/10 |
+| Loss | 0% | 0% | 0% |
+| Avg RTT | 6.1 ms | **2.95 ms** | 4.7 ms |
 
-VPP VXLAN has slightly lower latency (4.7 ms vs 6.1 ms). Both are stable.
+Mellanox has the lowest latency at ~3 ms.
 
 ### TCP Single Stream
 
-| Metric | Cilium eBPF | VPP VXLAN |
-|--------|-------------|-----------|
-| Throughput (sender) | **9.08 Gbps** | **1.35 Mbps** |
-| Throughput (receiver) | **9.05 Gbps** | **687 Kbps** |
-| Retransmits | 1,679 | 346 |
+| Metric | MANA Cilium | Mellanox Cilium | VPP VXLAN (MANA) |
+|--------|-------------|-----------------|------------------|
+| Throughput (sender) | 9.08 Gbps | **9.80 Gbps** | 1.35 Mbps |
+| Throughput (receiver) | 9.05 Gbps | **9.80 Gbps** | 687 Kbps |
+| Retransmits | 1,679 | 2,501 | 346 |
 
-**Cilium is ~6,700x faster for TCP** because it uses the kernel's native TCP stack with hardware checksum offload. VPP VXLAN's TCP is crippled by the inner checksum issue (Bug 4).
+Both MANA and Mellanox deliver ~10 Gbps for native Cilium TCP.
 
 ### TCP 4 Parallel Streams
 
-| Metric | Cilium eBPF | VPP VXLAN |
-|--------|-------------|-----------|
-| Throughput (sender) | **11.8 Gbps** | **5.78 Mbps** |
-| Throughput (receiver) | **11.7 Gbps** | **5.01 Mbps** |
-| Retransmits | 251 | 1,866 |
+| Metric | MANA Cilium | Mellanox Cilium | VPP VXLAN (MANA) |
+|--------|-------------|-----------------|------------------|
+| Throughput (sender) | **11.8 Gbps** | 11.2 Gbps | 5.78 Mbps |
+| Throughput (receiver) | **11.7 Gbps** | **11.1 Gbps** | 5.01 Mbps |
+| Retransmits | 251 | 16,776 | 1,866 |
 
-Cilium scales almost linearly to the NIC limit with multiple streams.
+Both NICs hit ~11-12 Gbps with 4 streams. Mellanox has more retransmits but same throughput.
 
 ### UDP (1200-byte packets)
 
-| Target Rate | Cilium Received | Cilium Loss | VPP VXLAN Received | VPP VXLAN Loss |
-|-------------|----------------|-------------|-------------------|----------------|
+| Target Rate | MANA Cilium Recv | MANA Loss | Mellanox Cilium Recv | Mellanox Loss | VPP VXLAN Recv | VPP Loss |
+|-------------|-----------------|-----------|---------------------|---------------|----------------|----------|
+| 1 Gbps | 979 Mbps | 1.2% | **996 Mbps** | 0.008% | 986 Mbps | 0.008% |
+| 5 Gbps | 1.35 Gbps | 32% | — | — | 606 Mbps | 64% |
 | 1 Gbps | **979 Mbps** | 1.2% | **986 Mbps** | 0.008% |
 | 5 Gbps | **1.35 Gbps** | 32% | **606 Mbps** | 64% |
 
@@ -56,24 +58,48 @@ At 1 Gbps, VPP and Cilium are almost equal (~980 Mbps). At higher rates, Cilium 
 ## Summary Comparison
 
 ```
-Throughput comparison (higher = better):
+TCP 1-stream throughput (higher = better):
 
-TCP 1-stream:
-  Cilium eBPF  ████████████████████████████████████████ 9,050 Mbps
-  VPP VXLAN    ▏                                            1 Mbps
+  Mellanox Cilium  ████████████████████████████████████████  9,800 Mbps
+  MANA Cilium      ████████████████████████████████████████  9,050 Mbps
+  VPP VXLAN (MANA) ▏                                            1 Mbps
 
-TCP 4-stream:
-  Cilium eBPF  ████████████████████████████████████████ 11,700 Mbps
-  VPP VXLAN    ▏                                            5 Mbps
+TCP 4-stream throughput:
 
-UDP 1G target:
-  Cilium eBPF  ████████████████████████████████████████  979 Mbps
-  VPP VXLAN    ████████████████████████████████████████  986 Mbps
+  MANA Cilium      ████████████████████████████████████████ 11,700 Mbps
+  Mellanox Cilium  ████████████████████████████████████████ 11,100 Mbps
+  VPP VXLAN (MANA) ▏                                            5 Mbps
 
-UDP 5G target:
-  Cilium eBPF  ██████████████████████████████████████   1,350 Mbps
-  VPP VXLAN    ████████████████████████                   606 Mbps
+UDP 1G (received):
+
+  Mellanox Cilium  ████████████████████████████████████████    996 Mbps
+  VPP VXLAN (MANA) ████████████████████████████████████████    986 Mbps
+  MANA Cilium      ████████████████████████████████████████    979 Mbps
+
+Ping latency (lower = better):
+
+  Mellanox Cilium  ██████                                    2.95 ms
+  VPP VXLAN (MANA) █████████                                4.70 ms
+  MANA Cilium      ████████████                             6.10 ms
 ```
+
+### MANA vs Mellanox — For Cilium (No VPP)
+
+Both NICs deliver **comparable throughput** (~10-12 Gbps TCP). Mellanox has:
+- **2x lower latency** (2.95 ms vs 6.1 ms)
+- **Better UDP delivery** (0.008% vs 1.2% loss at 1 Gbps)
+- **More retransmits at high load** (16K vs 251 for 4-stream TCP — but same throughput)
+
+For native Cilium eBPF workloads, both NICs are equally capable. The latency difference may matter for real-time traffic.
+
+### MANA vs Mellanox — For VPP
+
+This is where Mellanox wins decisively:
+- **af_packet TX works on Mellanox** (broken on MANA)
+- **SR-IOV VF passthrough** available for DPDK (not available on MANA v6)
+- **DPDK mlx5 driver** is mature and battle-tested (MANA DPDK driver fails at `ibv_create_cq`)
+
+For a VPP-based SASE deployment, **D4s_v5 (Mellanox) is the right choice**.
 
 ## Key Takeaways
 
