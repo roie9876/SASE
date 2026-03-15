@@ -50,35 +50,35 @@ VPP's `af_packet` TX on **MANA virtual NICs does not transmit frames**. VPP incr
 ```mermaid
 flowchart TD
     subgraph POD["SASE Service Pod"]
-        POD_NET1["net1 - 10.20.1.20/16\nmacvlan child"]
-        POD_ETH0["eth0 - AKS mgmt\n10.246.0.95"]
+        POD_NET1["net1 - 10.20.1.20/16<br/>macvlan child"]
+        POD_ETH0["eth0 - AKS mgmt<br/>10.246.0.95"]
     end
 
     subgraph VPP["VPP Process v26.02"]
-        DP0["host-dp0\naf_packet on dp0\n10.20.0.254/16\nGSO ON"]
-        VXLAN["vxlan_tunnel200\nVNI 200\nsrc 10.120.3.4\ndst 10.120.3.5"]
-        UL0["host-vpp-ul0\naf_packet V2\n172.16.200.2/30\nGSO ON"]
-        RX["host-eth1\naf_packet RX only\n10.120.3.4/24\nvxlan-bypass ON"]
-        VX100["host-vxlan100\nN-S branch\nfc00::1/64"]
+        DP0["host-dp0<br/>af_packet on dp0<br/>10.20.0.254/16<br/>GSO ON"]
+        VXLAN["vxlan_tunnel200<br/>VNI 200<br/>src 10.120.3.4<br/>dst 10.120.3.5"]
+        UL0["host-vpp-ul0<br/>af_packet V2<br/>172.16.200.2/30<br/>GSO ON"]
+        RX["host-eth1<br/>af_packet RX only<br/>10.120.3.4/24<br/>vxlan-bypass ON"]
+        VX100["host-vxlan100<br/>N-S branch<br/>fc00::1/64"]
     end
 
     subgraph LINUX["Linux Kernel"]
-        MACVLAN["dp0 - macvlan bridge\nparent on eth1"]
-        VETH_VPP["vpp-ul0\nveth VPP side\nMTU 3900"]
-        VETH_LNX["linux-ul0\nveth Linux side\n172.16.200.1/30"]
-        FWD["ip_forward=1\nrp_filter=0"]
-        SNAT["nft SNAT\nUDP/4789\nsrc to 10.120.3.4"]
-        LNX_VX100["vxlan100\nLinux VXLAN id=100"]
+        MACVLAN["dp0 - macvlan bridge<br/>parent on eth1"]
+        VETH_VPP["vpp-ul0<br/>veth VPP side<br/>MTU 3900"]
+        VETH_LNX["linux-ul0<br/>veth Linux side<br/>172.16.200.1/30"]
+        FWD["ip_forward=1<br/>rp_filter=0"]
+        SNAT["nft SNAT<br/>UDP/4789<br/>src to 10.120.3.4"]
+        LNX_VX100["vxlan100<br/>Linux VXLAN id=100"]
     end
 
     subgraph NICS["Physical NICs"]
-        ETH1["eth1 - MANA dpdk-nic\nIP removed, MTU 3900\nTX broken, RX works"]
-        ETH0["eth0 - MANA mgmt\n10.120.2.4"]
+        ETH1["eth1 - MANA dpdk-nic<br/>IP removed, MTU 3900<br/>TX broken, RX works"]
+        ETH0["eth0 - MANA mgmt<br/>10.120.2.4"]
     end
 
     subgraph AZURE["Azure SDN"]
-        REMOTE["Remote Node\n10.120.3.5"]
-        BRANCH["Branch VM\n10.120.4.4"]
+        REMOTE["Remote Node<br/>10.120.3.5"]
+        BRANCH["Branch VM<br/>10.120.4.4"]
     end
 
     POD_NET1 -->|L2 frames| MACVLAN
