@@ -1,63 +1,94 @@
 # Phase 1 Node-Local VPP POC
 
-This folder is the working area for the new Phase 1 proof of concept.
+## Scenario Index
 
-It is separated from older material so multiple POC scenarios can live side by side without mixing assumptions, manifests, or scripts.
+| Folder | Status | What It Tests | Key Result |
+|--------|--------|---------------|------------|
+| [01-vxlan-srv6-afpacket](./01-vxlan-srv6-afpacket/) | Validated | Same-node: branch VXLAN + SRv6 → service pod | 2.16 Gbps TCP, 1.48 Gbps UDP |
+| [02-service-pod-dual-nic](./02-service-pod-dual-nic/) | Abandoned | Dual-NIC service pod experiment | Not pursued |
+| [03-mana-dpdk-validation](./03-mana-dpdk-validation/) | Failed | DPDK on MANA NIC | `ibv_create_cq` error — Azure VF restrictions |
+| [05-vpp-owned-eth1](./05-vpp-owned-eth1/) | **Active** | E-W: VPP VXLAN between 2 MANA nodes | **1 Gbps UDP, 1.4 Mbps TCP** |
+| [06-baseline-cilium-ebpf](./06-baseline-cilium-ebpf/) | Validated | Cilium native + VPP plugin investigation | **9-12 Gbps TCP (Cilium)** |
 
-## Goal
+## Complete E-W Performance Results
 
-Prove that one AKS worker node can behave like a SASE worker with:
+### Throughput Summary
 
-- VPP as the node-local forwarding engine
-- a management path separated from a dataplane path
-- branch traffic entering as VXLAN with inner SRv6 payload
-- static same-node service delivery first
-- native MANA plus DPDK treated as a gated optimization track, not the only bring-up path
+| Method | TCP 1-stream | UDP 1G | Ping RTT |
+|--------|-------------|--------|----------|
+| Linux kernel direct (no VPP) | 12.2 Gbps | — | — |
+| Cilium eBPF (MANA D4s_v6) | 9.05 Gbps | 979 Mbps | 6.1 ms |
+| Cilium eBPF (Mellanox D4s_v5) | 9.80 Gbps | 996 Mbps | 2.95 ms |
+| **VPP VXLAN veth (MANA D4s_v6)** | **1.35 Mbps** | **986 Mbps** | **4.7 ms** |
 
-## Current Phase 1 Status
+### VPP VXLAN Detailed Results (Scenario 05)
 
-Scenario `01-vxlan-srv6-afpacket` is now the live validated baseline for Phase 1.
+| Test | Throughput | Loss/Retransmits |
+|------|-----------|-----------------|
+| ICMP ping (both directions) | 4.5 ms avg | 0% loss |
+| TCP 1-stream | 1.35 Mbps | 346 retransmits |
+| TCP 4-stream | 5 Mbps | 1,866 retransmits |
+| UDP 1-flow 1G | 986 Mbps | 0.008% loss |
+| UDP 1-flow 2G | 927 Mbps | 26% loss |
+| UDP 1-flow 5G | 606 Mbps | 64% loss |
+| UDP 2-flow 500M each | 602 Mbps total | 39% loss |
+| UDP 4-flow 200M each | 727 Mbps total | 8.5% loss |
+| UDP 4-flow 500M each | 609 Mbps total | 66% loss |
 
-What is proven so far:
+### VPP Interface Plugin Tests
 
-- the branch tunnel can land on the AKS forwarding NIC `eth1` instead of the node management IP
-- VPP can decapsulate VXLAN, process the SRv6 context, and deliver traffic to a same-node service pod
-- the path is stable enough for real `ping` and `iperf3` validation
-- the current tuned result is about `2.16 Gbit/s` TCP and about `1.48 Gbit/s` UDP at `1.5 Gbit/s` offered load
+| Plugin | MANA (D4s_v6) | Mellanox (D4s_v5) | Error |
+|--------|--------------|-------------------|-------|
+| af_packet v3 | TX broken | TX broken | TPACKET ring doesn't flush |
+| af_packet v2 | TX broken | TX broken | sendto succeeds, 0 on wire |
+| af_xdp | not tested | TX broken | XDP UMEM TX, 0 on wire |
+| rdma | N/A | Failed | ibv_create_flow() not supported |
+| dpdk (MANA PMD) | Failed | N/A | ibv_create_cq() failed |
+| **TAP + bridge** | **TX works** | **TX works** | Frames reach eth1 |
+| **veth + ip_forward** | **TX works** | not tested | Working E-W solution |
+| Python AF_PACKET send() | **TX works** | **TX works** | Proves kernel path works |
 
-What has now been added for the next test stage:
+### Bottleneck Analysis
 
-- the AKS node pool was scaled from one worker to two workers
-- the VMSS model was verified to carry the forwarding NIC on new nodes as well
-- a second VPP pod and a second service pod were deployed on Node 2
-- a dedicated Node 2 dataplane subnet was introduced to avoid `host-local` IPAM overlap with Node 1
+```
+12.5 Gbps  ── Azure VM bandwidth allocation (D4s_v6 / D4s_v5)
+                │
+12.2 Gbps  ── Kernel direct (Linux TCP between nodes)
+                │
+ 9-12 Gbps ── Cilium eBPF (native AKS CNI)
+                │
+ ~1 Gbps   ── VPP VXLAN via veth (af_packet + Linux forwarding overhead)
+                │
+ ~1.4 Mbps ── VPP VXLAN TCP (inner checksum bug limits TCP severely)
+```
 
-Current Phase 1B status:
+## Key Findings
 
-- east-west worker-to-worker dataplane testing is now an active test item
-- Node 2 local service-to-VPP dataplane reachability was recovered after fixing the `host-dp0` path on the second VPP instance
-- inter-node underlay reachability over forwarding NICs `10.120.3.4 <-> 10.120.3.5` is working
-- inter-node service-pod forwarding through the second VPP instance is not yet stable enough to claim a valid throughput result
+1. **VPP E-W works** — ICMP and UDP traffic flows bidirectionally between service pods on different MANA nodes through VPP VXLAN tunnels. 0% packet loss for ICMP, ~1 Gbps for UDP.
 
-What was learned so far:
+2. **4 VPP bugs fixed** to get E-W working:
+   - Bug 1: VXLAN decap hash includes encap_fib_index → use encap-vrf-id 0
+   - Bug 2: Cilium eBPF masquerades source IP → tc filter del + nft SNAT
+   - Bug 3: uRPF fails on host-eth1 → ip4-vxlan-bypass
+   - Bug 4: af_packet v2 outer IP checksum wrong → GSO feature + v2 mode
 
-- the forwarding underlay can be larger than the active service datapath
-- on this AKS node, the Linux VXLAN interface still tops out at `1450`
-- with SRv6 encapsulation on the branch route, the practical route MTU becomes `1386`
-- PMTU alignment and offload control are required for stable TCP
-- scaling out the worker pool is straightforward, but cross-node throughput depends on stabilizing the second VPP instance's inter-node forwarding path before load tests are meaningful
+3. **af_packet TX broken on Azure** — VPP's TPACKET ring and XDP UMEM TX modes don't work on Azure's hv_netvsc driver. Plain Python AF_PACKET send() works, proving it's a VPP/TPACKET issue, not Azure.
 
-Read [01-vxlan-srv6-afpacket/README.md](./01-vxlan-srv6-afpacket/README.md) for the full runbook, debugging findings, MTU analysis, and performance results.
+4. **Veth workaround** — VPP sends via TAP or veth to kernel, kernel forwards normally to eth1. Caps throughput at ~1 Gbps.
 
-## Why This Folder Exists
+5. **TCP is crippled** (~1.4 Mbps) due to inner TCP checksum not being recomputed through the VXLAN path. UDP works fine.
 
-The repository already contains useful implementation history under `archive/legacy-pocs/aks-dpdk-poc`, but the active Phase 1 work needs its own clean location.
+6. **No DPDK/RDMA path on Azure** — Both MANA and Mellanox VFs restrict ibverbs APIs needed by VPP's DPDK and RDMA plugins.
 
-This folder is intended to hold:
+## Environment
 
-- current docs
-- current manifests
-- current scripts
+| Resource | Value |
+|----------|-------|
+| AKS Cluster | sase-ubuntu2404-aks (swedencentral) |
+| MANA pool | 2× Standard_D4s_v6, 12.5 Gbps each |
+| Mellanox pool | 2× Standard_D4s_v5, 12.5 Gbps each |
+| VPP | v26.02-release |
+| CNI | Cilium (Azure CNI overlay) |
 - scenario-specific configs
 - test notes and checkpoints
 
